@@ -1,0 +1,10 @@
+[0:00-0:08] Agent: Thank you for calling Swyftin Support, this is Maya. How can I help you today?
+[0:08-0:17] Customer: Hi, I am frustrated because I was charged twice for my subscription this month.
+[0:17-0:28] Agent: I am sorry that happened. Let me check the billing record and make sure we get this resolved for you.
+[0:28-0:39] Customer: Okay, I appreciate it. I just need to know if I can get the extra charge refunded.
+[0:39-0:53] Agent: I found the duplicate charge. I am issuing a refund now, and it should appear on your card in three to five business days.
+[0:53-1:03] Customer: Great, thank you. That solves my issue.
+[1:03-1:13] Agent: You are welcome. Is there anything else I can help you with today?
+[1:13-1:19] Customer: No, that is all.
+[1:19-1:26] Agent: Thanks for calling Swyftin Support. Have a great day.
+
