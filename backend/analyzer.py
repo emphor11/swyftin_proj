@@ -255,7 +255,19 @@ def analyze_transcript(
     if mode not in {"auto", "llm", "heuristic"}:
         raise ValueError("analyzer_mode must be one of: auto, llm, heuristic")
 
-    if mode in {"auto", "llm"} and settings.phi3_model_path.exists():
+    if mode == "auto" and settings.phi3_model_path.exists():
+        try:
+            return _analyze_with_llm(transcript_blocks, settings)
+        except Exception as exc:  # noqa: BLE001 - auto mode should keep the demo path usable.
+            analysis = heuristic_analysis(transcript_blocks)
+            analysis["analysis_mode"] = "heuristic-auto-fallback"
+            analysis["model"] = "rule-based fallback"
+            analysis.setdefault("pipeline_warnings", []).append(
+                f"Phi-3 analysis fallback used: {exc}"
+            )
+            return analysis
+
+    if mode == "llm" and settings.phi3_model_path.exists():
         return _analyze_with_llm(transcript_blocks, settings)
 
     if mode == "llm":
