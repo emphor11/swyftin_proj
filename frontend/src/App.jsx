@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, AlertCircle, BarChart3, Loader2, RefreshCw } from "lucide-react";
+import Activity from "lucide-react/dist/esm/icons/activity.js";
+import AlertCircle from "lucide-react/dist/esm/icons/alert-circle.js";
+import BarChart3 from "lucide-react/dist/esm/icons/bar-chart-3.js";
+import Loader2 from "lucide-react/dist/esm/icons/loader-2.js";
+import RefreshCw from "lucide-react/dist/esm/icons/refresh-cw.js";
 import { analyzeAudio, fetchReport, fetchReports } from "./api.js";
 import UploadScreen from "./components/UploadScreen.jsx";
 import PipelineProgress from "./components/PipelineProgress.jsx";

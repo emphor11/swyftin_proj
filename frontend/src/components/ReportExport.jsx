@@ -1,4 +1,4 @@
-import { Download } from "lucide-react";
+import Download from "lucide-react/dist/esm/icons/download.js";
 import { reportDownloadUrl } from "../api.js";
 
 export default function ReportExport({ reportId }) {

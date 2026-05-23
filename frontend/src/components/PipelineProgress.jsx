@@ -1,4 +1,6 @@
-import { Check, Loader2, RadioTower } from "lucide-react";
+import Check from "lucide-react/dist/esm/icons/check.js";
+import Loader2 from "lucide-react/dist/esm/icons/loader-2.js";
+import RadioTower from "lucide-react/dist/esm/icons/radio-tower.js";
 
 const STAGES = [
   { key: "normalizing", label: "Normalizing Audio", threshold: 10 },

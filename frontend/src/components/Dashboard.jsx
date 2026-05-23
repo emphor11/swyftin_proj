@@ -1,4 +1,6 @@
-import { ArrowLeft, Clock, ShieldAlert } from "lucide-react";
+import ArrowLeft from "lucide-react/dist/esm/icons/arrow-left.js";
+import Clock from "lucide-react/dist/esm/icons/clock.js";
+import ShieldAlert from "lucide-react/dist/esm/icons/shield-alert.js";
 import AnalysisCards from "./AnalysisCards.jsx";
 import ReportExport from "./ReportExport.jsx";
 import ScoreGauge from "./ScoreGauge.jsx";

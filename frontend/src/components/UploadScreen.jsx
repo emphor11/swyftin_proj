@@ -1,5 +1,8 @@
 import { useRef, useState } from "react";
-import { FileAudio, FolderOpen, History, UploadCloud } from "lucide-react";
+import FileAudio from "lucide-react/dist/esm/icons/file-audio.js";
+import FolderOpen from "lucide-react/dist/esm/icons/folder-open.js";
+import History from "lucide-react/dist/esm/icons/history.js";
+import UploadCloud from "lucide-react/dist/esm/icons/upload-cloud.js";
 import { shortDate } from "../utils/formatters.js";
 
 export default function UploadScreen({ latestReport, reports, onUpload, onLoadReport }) {

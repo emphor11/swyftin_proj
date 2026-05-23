@@ -1,4 +1,6 @@
-import { AlertTriangle, CheckCircle2, MoveRight } from "lucide-react";
+import AlertTriangle from "lucide-react/dist/esm/icons/triangle-alert.js";
+import CheckCircle2 from "lucide-react/dist/esm/icons/circle-check-big.js";
+import MoveRight from "lucide-react/dist/esm/icons/move-right.js";
 
 const SECTIONS = [
   {

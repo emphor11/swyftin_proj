@@ -1,4 +1,6 @@
-import { Frown, Meh, Smile } from "lucide-react";
+import Frown from "lucide-react/dist/esm/icons/frown.js";
+import Meh from "lucide-react/dist/esm/icons/meh.js";
+import Smile from "lucide-react/dist/esm/icons/smile.js";
 
 const STYLES = {
   positive: "border-success/40 bg-success/10 text-success",
