@@ -41,6 +41,7 @@ def build_markdown_report(analysis: dict[str, Any], metadata: dict[str, Any]) ->
     score_breakdown = analysis.get("score_breakdown", {})
     key_moments = analysis.get("key_moments", [])
     compliance_flags = analysis.get("compliance_flags") or ["No compliance issues detected"]
+    score_reasoning = _score_reasoning(analysis)
 
     return "\n".join(
         [
@@ -61,7 +62,7 @@ def build_markdown_report(analysis: dict[str, Any], metadata: dict[str, Any]) ->
             f"- **Customer Journey:** {analysis.get('customer_sentiment_journey', '')}",
             "",
             f"## Agent Score: {analysis.get('agent_score', 0)} / 10",
-            "",
+            *([score_reasoning, ""] if score_reasoning else [""]),
             "| Category | Score |",
             "|---|---:|",
             f"| Greeting & Opening | {score_breakdown.get('greeting_and_opening', 0)}/10 |",
@@ -87,6 +88,13 @@ def build_markdown_report(analysis: dict[str, Any], metadata: dict[str, Any]) ->
             "",
         ]
     )
+
+
+def _score_reasoning(analysis: dict[str, Any]) -> str:
+    reasoning = str(analysis.get("score_reasoning", "")).strip()
+    if not reasoning:
+        return ""
+    return f"**Reasoning:** {reasoning}"
 
 
 def _numbered_list(items: list[Any]) -> str:

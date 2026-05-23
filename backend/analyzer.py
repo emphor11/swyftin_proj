@@ -138,6 +138,37 @@ def normalize_analysis_schema(analysis: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def enrich_analysis_from_transcript(analysis: dict[str, Any], blocks: list[dict]) -> dict[str, Any]:
+    enriched = normalize_analysis_schema(analysis)
+    agent_text = " ".join(str(block.get("text", "")) for block in blocks if block.get("speaker") == "Agent").lower()
+    first_agent = next((block for block in blocks if block.get("speaker") == "Agent"), None)
+
+    if not enriched.get("strengths"):
+        enriched["strengths"] = _fallback_strengths(
+            first_agent,
+            enriched["score_breakdown"].get("active_listening", 5),
+            enriched["score_breakdown"].get("problem_resolution", 5),
+        )
+
+    if not enriched.get("improvement_areas"):
+        enriched["improvement_areas"] = _fallback_improvements(enriched["score_breakdown"])
+
+    if not enriched.get("recommended_next_steps"):
+        enriched["recommended_next_steps"] = [
+            "Open with ownership language that makes the customer feel the issue is being handled.",
+            "Restate the customer's issue before explaining the fix or next action.",
+            "Close with a recap of the outcome, timeline, and a final check for questions.",
+        ]
+
+    if not enriched.get("key_moments"):
+        enriched["key_moments"] = _fallback_key_moments(blocks)
+
+    if not enriched.get("compliance_flags"):
+        enriched["compliance_flags"] = _fallback_compliance_flags(agent_text)
+
+    return enriched
+
+
 def _clamp_score(value: Any) -> int:
     try:
         score = int(round(float(value)))
@@ -208,7 +239,7 @@ def _analyze_with_llm(transcript_blocks: list[dict], settings: Settings) -> dict
     if errors:
         analysis["llm_errors"] = errors
 
-    analysis = normalize_analysis_schema(analysis)
+    analysis = enrich_analysis_from_transcript(analysis, transcript_blocks)
     analysis["analysis_mode"] = "llm"
     analysis["model"] = settings.phi3_model_path.name
     return analysis
