@@ -6,58 +6,58 @@ from functools import lru_cache
 from typing import Any
 
 from .config import Settings
-from .merger import format_timestamp, format_transcript_for_prompt
+from .merger import format_timestamp
 
 
-ANALYSIS_PROMPT = """<|system|>
-You are an expert call center quality analyst with 15 years of experience coaching customer service agents.
-You analyze call transcripts and provide specific, actionable feedback.
-You MUST respond with only a valid JSON object. Do not include markdown, prose, or code fences.
+SUMMARY_PROMPT = """<|system|>
+You are a call center quality analyst. Respond with ONLY valid JSON. No markdown, no explanation.
 <|end|>
-
 <|user|>
-Analyze this customer service call transcript and return a JSON object with exactly these fields:
-
-{{
-  "call_summary": "A 2-3 sentence overview of the call, the customer's issue, and the resolution.",
-  "overall_sentiment": "positive | negative | neutral | mixed",
-  "customer_sentiment_journey": "How the customer's mood changed through the call.",
-  "agent_score": 1,
-  "score_breakdown": {{
-    "greeting_and_opening": 1,
-    "active_listening": 1,
-    "problem_resolution": 1,
-    "professionalism": 1,
-    "closing": 1
-  }},
-  "strengths": [
-    "Specific strength with a direct quote or timestamp reference from the transcript"
-  ],
-  "improvement_areas": [
-    "Specific area with concrete example and what the agent should do instead"
-  ],
-  "recommended_next_steps": [
-    "Actionable coaching tip the agent can implement immediately"
-  ],
-  "key_moments": [
-    {{
-      "timestamp_range": "0:00-0:15",
-      "speaker": "Agent | Customer",
-      "description": "What happened and why it matters",
-      "impact": "positive | negative | neutral"
-    }}
-  ],
-  "compliance_flags": [
-    "Any compliance concerns, or No compliance issues detected"
-  ]
-}}
-
-Use integer scores from 1 to 10. Keep feedback tied to the transcript.
+Analyze this call transcript. Return JSON with these exact keys:
+- "call_summary": 2-3 sentence overview
+- "overall_sentiment": one of positive/negative/neutral/mixed
+- "customer_sentiment_journey": e.g. "frustrated -> satisfied"
+- "agent_score": integer 1-10
+- "score_reasoning": one sentence explaining the score
 
 TRANSCRIPT:
 {transcript}
 <|end|>
 
+<|assistant|>
+"""
+
+COACHING_PROMPT = """<|system|>
+You are a call center quality analyst. Respond with ONLY valid JSON. No markdown, no explanation.
+<|end|>
+<|user|>
+This call was scored {agent_score}/10. Summary: {call_summary}
+
+Based on the transcript below, return JSON with these exact keys:
+- "strengths": array of 2-3 specific strengths with references to what the agent said or did
+- "improvement_areas": array of 2-3 specific weaknesses with what to do differently
+- "recommended_next_steps": array of 2-3 actionable coaching tips
+
+TRANSCRIPT:
+{transcript}
+<|end|>
+<|assistant|>
+"""
+
+MOMENTS_PROMPT = """<|system|>
+You are a call center quality analyst. Respond with ONLY valid JSON. No markdown, no explanation.
+<|end|>
+<|user|>
+This call was scored {agent_score}/10.
+
+Based on the transcript below, return JSON with these exact keys:
+- "score_breakdown": object with keys greeting_and_opening, active_listening, problem_resolution, professionalism, closing (each integer 1-10)
+- "key_moments": array of 1-3 objects with keys timestamp_range, speaker, description, impact
+- "compliance_flags": array of strings (empty array if no issues)
+
+TRANSCRIPT:
+{transcript}
+<|end|>
 <|assistant|>
 """
 
@@ -71,7 +71,7 @@ DEFAULT_BREAKDOWN = {
 }
 
 
-def parse_json_response(raw: str) -> dict[str, Any]:
+def _parse_json(raw: str) -> dict[str, Any]:
     candidates = [raw.strip()]
     candidates.append(re.sub(r"```(?:json)?\s*", "", raw, flags=re.IGNORECASE).replace("```", "").strip())
 
@@ -86,13 +86,34 @@ def parse_json_response(raw: str) -> dict[str, Any]:
             continue
 
     return {
-        "error": "Failed to parse SLM output",
-        "raw_output": raw,
+        "error": "parse_failed",
+        "raw": raw,
     }
+
+
+def parse_json_response(raw: str) -> dict[str, Any]:
+    return _parse_json(raw)
+
+
+def _format_transcript(blocks: list[dict], max_chars: int = 3000) -> str:
+    lines = []
+    for block in blocks:
+        speaker = str(block.get("speaker", "Speaker")).strip() or "Speaker"
+        text = str(block.get("text", "")).strip()
+        if text:
+            lines.append(f"[{speaker}]: {text}")
+
+    transcript = "\n".join(lines)
+    if len(transcript) <= max_chars:
+        return transcript
+
+    marker = "\n[transcript truncated]"
+    return transcript[: max_chars - len(marker)].rstrip() + marker
 
 
 def normalize_analysis_schema(analysis: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(analysis)
+
     normalized.setdefault("call_summary", "The call was analyzed, but the summary was not returned.")
     normalized.setdefault("overall_sentiment", "neutral")
     normalized.setdefault("customer_sentiment_journey", "Not enough information to determine a journey.")
@@ -107,13 +128,12 @@ def normalize_analysis_schema(analysis: dict[str, Any]) -> dict[str, Any]:
     }
     normalized["agent_score"] = _clamp_score(normalized.get("agent_score", 5))
 
+    normalized.setdefault("compliance_flags", [])
+
     for key in ("strengths", "improvement_areas", "recommended_next_steps", "key_moments", "compliance_flags"):
         value = normalized.get(key)
         if not isinstance(value, list):
             normalized[key] = [] if value in (None, "") else [str(value)]
-
-    if not normalized["compliance_flags"]:
-        normalized["compliance_flags"] = ["No compliance issues detected"]
 
     return normalized
 
@@ -127,7 +147,7 @@ def _clamp_score(value: Any) -> int:
 
 
 @lru_cache(maxsize=1)
-def _load_llm(model_path: str, n_ctx: int, n_threads: int):
+def _load_llm(model_path: str):
     try:
         from llama_cpp import Llama
     except ImportError as exc:
@@ -135,11 +155,63 @@ def _load_llm(model_path: str, n_ctx: int, n_threads: int):
 
     return Llama(
         model_path=model_path,
-        n_ctx=n_ctx,
-        n_threads=n_threads,
+        n_ctx=4096,
+        n_threads=4,
         n_gpu_layers=0,
         verbose=False,
     )
+
+
+def _run_llm_json(llm: Any, prompt: str) -> dict[str, Any]:
+    response = llm(
+        prompt,
+        max_tokens=400,
+        temperature=0.3,
+        stop=["<|end|>"],
+    )
+    raw_output = response["choices"][0]["text"].strip()
+    return _parse_json(raw_output)
+
+
+def _analyze_with_llm(transcript_blocks: list[dict], settings: Settings) -> dict[str, Any]:
+    transcript = _format_transcript(transcript_blocks, max_chars=3000)
+    llm = _load_llm(str(settings.phi3_model_path))
+
+    summary = _run_llm_json(llm, SUMMARY_PROMPT.format(transcript=transcript))
+    agent_score = _clamp_score(summary.get("agent_score", 5))
+    call_summary = str(summary.get("call_summary", "Summary unavailable."))
+
+    coaching = _run_llm_json(
+        llm,
+        COACHING_PROMPT.format(
+            transcript=transcript,
+            agent_score=agent_score,
+            call_summary=call_summary,
+        ),
+    )
+    moments = _run_llm_json(
+        llm,
+        MOMENTS_PROMPT.format(
+            transcript=transcript,
+            agent_score=agent_score,
+        ),
+    )
+
+    analysis: dict[str, Any] = {}
+    errors = {}
+    for name, result in (("summary", summary), ("coaching", coaching), ("moments", moments)):
+        if "error" in result:
+            errors[name] = result
+            continue
+        analysis.update(result)
+
+    if errors:
+        analysis["llm_errors"] = errors
+
+    analysis = normalize_analysis_schema(analysis)
+    analysis["analysis_mode"] = "llm"
+    analysis["model"] = settings.phi3_model_path.name
+    return analysis
 
 
 def analyze_transcript(
@@ -148,30 +220,12 @@ def analyze_transcript(
     analyzer_mode: str | None = None,
 ) -> dict[str, Any]:
     mode = (analyzer_mode or settings.analyzer_mode).lower()
-    transcript = format_transcript_for_prompt(transcript_blocks, settings.max_transcript_chars)
 
     if mode not in {"auto", "llm", "heuristic"}:
         raise ValueError("analyzer_mode must be one of: auto, llm, heuristic")
 
     if mode in {"auto", "llm"} and settings.phi3_model_path.exists():
-        prompt = ANALYSIS_PROMPT.format(transcript=transcript)
-        llm = _load_llm(
-            str(settings.phi3_model_path),
-            settings.llama_ctx,
-            settings.llama_threads,
-        )
-        response = llm(
-            prompt,
-            max_tokens=2048,
-            temperature=0.2,
-            top_p=0.9,
-            stop=["<|end|>"],
-        )
-        raw_output = response["choices"][0]["text"].strip()
-        analysis = normalize_analysis_schema(parse_json_response(raw_output))
-        analysis["analysis_mode"] = "llm"
-        analysis["model"] = settings.phi3_model_path.name
-        return analysis
+        return _analyze_with_llm(transcript_blocks, settings)
 
     if mode == "llm":
         raise FileNotFoundError(
@@ -313,4 +367,3 @@ def _fallback_compliance_flags(agent_text: str) -> list[str]:
     if any(cue in agent_text for cue in ("verify", "account number", "security")):
         return ["No compliance issues detected"]
     return ["Account verification was not clearly present in the transcript; verify whether this was required for the call type."]
-
