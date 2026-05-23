@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import shutil
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -67,7 +67,7 @@ def run_pipeline(
         "id": report_dir.name,
         "filename": input_path.name,
         "duration_seconds": duration,
-        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
 
     _emit(progress_callback, "generating_report", 95, "Writing JSON, Markdown, and transcript outputs.")
@@ -111,7 +111,7 @@ def run_transcript_pipeline(
         "id": report_dir.name,
         "filename": transcript_path.name,
         "duration_seconds": transcript_blocks[-1]["end"] if transcript_blocks else 0,
-        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
 
     _emit(progress_callback, "generating_report", 95, "Writing JSON, Markdown, and transcript outputs.")
@@ -125,4 +125,3 @@ def run_transcript_pipeline(
         "transcript": transcript_blocks,
         "paths": {key: str(value) for key, value in paths.items()},
     }
-

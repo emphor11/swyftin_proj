@@ -97,6 +97,14 @@ def transcribe(audio_path: str | Path, settings: Settings) -> list[dict]:
 @lru_cache(maxsize=1)
 def _load_pyannote_pipeline(token: str | None):
     try:
+        import numpy as np
+
+        if not hasattr(np, "NAN"):
+            np.NAN = np.nan
+    except ImportError:
+        pass
+
+    try:
         from pyannote.audio import Pipeline
     except ImportError as exc:
         raise DiarizationError(
@@ -140,4 +148,3 @@ def diarize_with_fallback(
         return diarize(audio_path, settings), None
     except Exception as exc:  # noqa: BLE001 - fallback should catch setup/runtime failures.
         return fallback_diarization_from_whisper(whisper_segments), str(exc)
-

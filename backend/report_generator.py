@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +33,7 @@ def generate_reports(
 
 
 def build_markdown_report(analysis: dict[str, Any], metadata: dict[str, Any]) -> str:
-    generated_at = metadata.get("generated_at") or datetime.now(UTC).isoformat(timespec="seconds")
+    generated_at = metadata.get("generated_at") or datetime.now(timezone.utc).isoformat(timespec="seconds")
     filename = metadata.get("filename", "Transcript input")
     duration = metadata.get("duration_seconds")
     duration_text = format_timestamp(duration) if duration else "Unknown"
@@ -135,4 +135,3 @@ def _build_transcript_text(blocks: list[dict]) -> str:
         end = format_timestamp(block.get("end", 0))
         lines.append(f"[{start}-{end}] {block.get('speaker', 'Speaker')}: {block.get('text', '')}")
     return "\n".join(lines) + "\n"
-

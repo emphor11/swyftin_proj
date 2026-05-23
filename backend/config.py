@@ -8,6 +8,14 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parents[1]
 BACKEND_DIR = ROOT_DIR / "backend"
 
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - dependency exists in the runtime env.
+    load_dotenv = None
+
+if load_dotenv:
+    load_dotenv(ROOT_DIR / ".env")
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -47,4 +55,3 @@ def ensure_directories(settings: Settings) -> None:
         settings.model_dir,
     ):
         path.mkdir(parents=True, exist_ok=True)
-
