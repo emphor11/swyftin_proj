@@ -5,17 +5,54 @@ from pathlib import Path
 from typing import Iterable
 
 
-AGENT_CUES = (
-    "thank you for calling",
-    "thanks for calling",
-    "how may i help",
-    "how can i help",
-    "my name is",
-    "this is ",
-    "support",
-    "account verification",
-    "verify your",
-)
+AGENT_CUES = {
+    "thank you for calling": 5,
+    "thanks for calling": 5,
+    "how may i help": 5,
+    "how can i help": 5,
+    "support": 3,
+    "account verification": 4,
+    "verify your": 4,
+    "calling you": 3,
+    "help you": 3,
+    "guide you": 3,
+    "please open": 3,
+    "open any desk": 4,
+    "give me the any desk": 4,
+    "finance department": 3,
+    "withdrawal": 2,
+    "platform": 2,
+}
+
+CUSTOMER_CUES = {
+    "my name is": 2,
+    "i need help": 4,
+    "i'm having": 4,
+    "i am having": 4,
+    "i can't": 4,
+    "i cannot": 4,
+    "my account": 3,
+    "my order": 3,
+    "my bank": 2,
+    "yes": 1,
+}
+
+
+def _normalize_text_for_matching(text: str) -> str:
+    return re.sub(r"\s+", " ", text.lower().replace("’", "'")).strip()
+
+
+def _contains_cue(text: str, cue: str) -> bool:
+    tokens = [re.escape(token) for token in cue.split()]
+    if not tokens:
+        return False
+    pattern = r"(?<!\w)" + r"\s+".join(tokens) + r"(?!\w)"
+    return re.search(pattern, text) is not None
+
+
+def _score_cues(text: str, cues: dict[str, int]) -> int:
+    normalized = _normalize_text_for_matching(text)
+    return sum(weight for cue, weight in cues.items() if _contains_cue(normalized, cue))
 
 
 def format_timestamp(seconds: float | int | None) -> str:
@@ -101,12 +138,17 @@ def _infer_role_map(labeled_segments: list[dict]) -> dict[str, str]:
             speaker_order.append(speaker)
         speaker_text[speaker] = f"{speaker_text.get(speaker, '')} {segment.get('text', '')}"
 
-    agent_speaker = speaker_order[0] if speaker_order else "SPEAKER_00"
+    scores: dict[str, int] = {}
     for speaker in speaker_order:
-        sample = speaker_text.get(speaker, "").lower()
-        if any(cue in sample for cue in AGENT_CUES):
-            agent_speaker = speaker
-            break
+        sample = speaker_text.get(speaker, "")
+        agent_score = _score_cues(sample, AGENT_CUES)
+        customer_score = _score_cues(sample, CUSTOMER_CUES)
+        scores[speaker] = agent_score - customer_score
+
+    if scores and max(scores.values()) > 0:
+        agent_speaker = max(speaker_order, key=lambda speaker: scores.get(speaker, 0))
+    else:
+        agent_speaker = speaker_order[0] if speaker_order else "SPEAKER_00"
 
     role_map = {}
     for speaker in speaker_order:
@@ -166,12 +208,27 @@ def merge_transcript(
     return merged
 
 
+def _should_flip_fallback_speaker(previous: dict, current: dict) -> bool:
+    previous_end = float(previous.get("end", previous.get("start", 0.0)))
+    current_start = float(current.get("start", previous_end))
+    gap = current_start - previous_end
+    if gap <= 0.5:
+        return False
+    if gap >= 2.0:
+        return True
+
+    previous_text = str(previous.get("text", "")).strip()
+    current_text = str(current.get("text", "")).strip()
+    current_words = re.findall(r"\b\w+\b", current_text)
+    return previous_text.endswith("?") or (gap > 0.8 and len(current_words) <= 3)
+
+
 def fallback_diarization_from_whisper(whisper_segments: list[dict]) -> list[dict]:
     diarized: list[dict] = []
     current_speaker = "SPEAKER_00"
 
     for index, segment in enumerate(whisper_segments):
-        if index > 0:
+        if index > 0 and _should_flip_fallback_speaker(whisper_segments[index - 1], segment):
             current_speaker = "SPEAKER_01" if current_speaker == "SPEAKER_00" else "SPEAKER_00"
         diarized.append(
             {
@@ -196,11 +253,37 @@ def format_transcript_for_prompt(blocks: Iterable[dict], max_chars: int | None =
 
     transcript = "\n".join(lines)
     if max_chars and len(transcript) > max_chars:
-        half = max_chars // 2
+        separator = "\n\n[Transcript truncated for context length]\n\n"
+        half = max(1, (max_chars - len(separator)) // 2)
+
+        head: list[str] = []
+        head_length = 0
+        for line in lines:
+            next_length = len(line) + (1 if head else 0)
+            if head and head_length + next_length > half:
+                break
+            if not head and len(line) > half:
+                head.append(line[:half].rstrip())
+                break
+            head.append(line)
+            head_length += next_length
+
+        tail: list[str] = []
+        tail_length = 0
+        for line in reversed(lines):
+            next_length = len(line) + (1 if tail else 0)
+            if tail and tail_length + next_length > half:
+                break
+            if not tail and len(line) > half:
+                tail.append(line[-half:].lstrip())
+                break
+            tail.append(line)
+            tail_length += next_length
+
         transcript = (
-            transcript[:half].rstrip()
-            + "\n\n[Transcript truncated for context length]\n\n"
-            + transcript[-half:].lstrip()
+            "\n".join(head).rstrip()
+            + separator
+            + "\n".join(reversed(tail)).lstrip()
         )
     return transcript
 
@@ -214,6 +297,19 @@ def parse_labeled_transcript(text: str) -> list[dict]:
         re.IGNORECASE,
     )
 
+    def normalize_explicit_label(label: str) -> str:
+        normalized = re.sub(r"\s+", " ", label.strip())
+        lowered = normalized.lower()
+        if lowered == "agent":
+            return "Agent"
+        if lowered == "customer":
+            return "Customer"
+        if re.fullmatch(r"speaker\s+1", lowered):
+            return "Agent"
+        if re.fullmatch(r"speaker\s+2", lowered):
+            return "Customer"
+        return normalized.upper() if lowered.startswith("speaker_") else normalized
+
     cursor = 0.0
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -223,12 +319,12 @@ def parse_labeled_transcript(text: str) -> list[dict]:
         if match:
             start = timestamp_to_seconds(match.group("start")) if match.group("start") else cursor
             end = timestamp_to_seconds(match.group("end")) if match.group("end") else start + 5
-            speaker = match.group("speaker").replace("Speaker 1", "Agent").replace("Speaker 2", "Customer")
-            speaker = "Agent" if speaker.lower() == "agent" else "Customer" if speaker.lower() == "customer" else speaker
+            source_speaker = match.group("speaker").strip()
+            speaker = normalize_explicit_label(source_speaker)
             blocks.append(
                 {
                     "speaker": speaker,
-                    "source_speaker": speaker,
+                    "source_speaker": source_speaker,
                     "start": start,
                     "end": end,
                     "text": match.group("text").strip(),
@@ -249,9 +345,14 @@ def parse_labeled_transcript(text: str) -> list[dict]:
         )
         cursor += 5
 
+    role_map = _infer_role_map(blocks)
+    for block in blocks:
+        speaker = str(block.get("speaker", ""))
+        if speaker not in {"Agent", "Customer"}:
+            block["speaker"] = role_map.get(speaker, speaker)
+
     return blocks
 
 
 def write_transcript(blocks: list[dict], path: Path) -> None:
     path.write_text(format_transcript_for_prompt(blocks) + "\n", encoding="utf-8")
-

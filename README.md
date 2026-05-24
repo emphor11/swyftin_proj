@@ -191,6 +191,11 @@ transcript.txt
 | `VCA_LLAMA_CTX` | `4096` | Parsed by settings; current Llama initialization uses 4096 context. |
 | `VCA_PYANNOTE_TIMEOUT_SECONDS` | `90` | Maximum time spent trying Pyannote before falling back to speaker alternation. |
 | `VCA_PYANNOTE_NUM_SPEAKERS` | `2` | Forces Pyannote to cluster at exactly N speakers. Set to `0` to let Pyannote estimate speaker count, which is slower but useful for multi-party calls. |
+| `VCA_PYANNOTE_WORKER_STARTUP_TIMEOUT_SECONDS` | `300` | Maximum time for the persistent Pyannote worker to load imports/models and report ready. |
+| `VCA_PYANNOTE_WORKER_WARM_FORWARD` | `false` | Optional `true`/`false` flag. When true, the worker runs a tiny silent-audio forward pass before reporting ready; disabled by default because it can make startup too slow on CPU. |
+| `VCA_PYANNOTE_HF_TIMEOUT_SECONDS` | `120` | Hugging Face hub network timeout used by the worker. Increase this for manual preload runs if the model is not cached yet. |
+| `VCA_PYANNOTE_WORKER_THREADS` | `4` | Thread cap for Pyannote worker numerical libraries (`OMP`, `MKL`, `vecLib`, and `numexpr`). |
+| `VCA_PYANNOTE_STUB_TORCH_DYNAMO` | `true` | Installs a small worker-only `torch._dynamo` compatibility stub to avoid importing PyTorch's slow compile stack during Pyannote inference. Set to `false` if you need real `torch.compile` support in the worker. |
 | `VCA_CORS_ORIGIN` | `http://localhost:5173` | Frontend origin allowed by FastAPI CORS. |
 
 ## Troubleshooting
@@ -213,6 +218,29 @@ If Pyannote fails, verify all three:
 - You accepted the Pyannote model terms on Hugging Face.
 - `pyannote.audio` is installed in the same `.venv` used to run the backend.
 
-By default, diarization assumes a two-speaker support call through `VCA_PYANNOTE_NUM_SPEAKERS=2`. This avoids Pyannote's slower speaker-count estimation pass. Very long clips, first-time model downloads, or CPU-only execution can still exceed the timeout; raise `VCA_PYANNOTE_TIMEOUT_SECONDS` if needed.
+Before a demo, preload the gated Pyannote models once so startup does not hide download/auth problems:
+
+```bash
+.venv/bin/python -m backend.preload_pyannote --timeout 600
+```
+
+If this command hangs or fails, the issue is model access/cache rather than the app pipeline. Confirm that the Hugging Face account behind `HF_TOKEN` accepted the terms for `pyannote/speaker-diarization-3.1` and `pyannote/segmentation-3.0`.
+
+If the preload hangs during import, profile the import stack:
+
+```bash
+PYTHONPROFILEIMPORTTIME=1 .venv/bin/python -c "import pyannote.audio" 2> /tmp/importtime.txt
+sort -k2 -n /tmp/importtime.txt | tail -40
+```
+
+By default, diarization assumes a two-speaker support call through `VCA_PYANNOTE_NUM_SPEAKERS=2`. This avoids Pyannote's slower speaker-count estimation pass. The FastAPI backend starts a persistent Pyannote worker in the background at startup so the API port can come up immediately while Pyannote warms. The worker reports ready after the Pyannote pipeline is loaded; optional silent-audio warm inference can be enabled with `VCA_PYANNOTE_WORKER_WARM_FORWARD=true`, but it is disabled by default because it may exceed startup timeouts on CPU. CLI runs still work, but each CLI process may pay the cold-start cost because the process exits after one run.
+
+On macOS, `pyannote.audio` can spend a long time importing `pytorch_lightning`, `lightning_fabric`, `torch._dynamo`, and `sympy` before the model load even begins. This project does not use `torch.compile`, so the worker defaults `VCA_PYANNOTE_STUB_TORCH_DYNAMO=true` to skip that compile-only import path during Pyannote inference. The worker logs these import phases to stderr so you can distinguish "slow import" from "model download/auth failure".
+
+Very long clips, first-time model downloads, or CPU-only execution can still exceed the timeout; raise `VCA_PYANNOTE_TIMEOUT_SECONDS` if needed. If a hard crash leaves a worker behind, clean it up with:
+
+```bash
+pkill -f pyannote_worker.py
+```
 
 If Phi-3 is slow, use `--analyzer-mode heuristic` for smoke tests and demos. The local Phi-3 CPU path is functional but can take many minutes for the three-call analysis strategy.

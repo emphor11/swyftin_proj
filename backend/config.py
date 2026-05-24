@@ -40,6 +40,17 @@ class Settings:
     llama_ctx: int = int(os.getenv("VCA_LLAMA_CTX", "4096"))
     pyannote_timeout_seconds: int = int(os.getenv("VCA_PYANNOTE_TIMEOUT_SECONDS", "90"))
     pyannote_num_speakers: int = int(os.getenv("VCA_PYANNOTE_NUM_SPEAKERS", "2"))
+    pyannote_worker_startup_timeout_seconds: int = int(
+        os.getenv("VCA_PYANNOTE_WORKER_STARTUP_TIMEOUT_SECONDS", "300")
+    )
+    pyannote_hf_timeout_seconds: int = int(os.getenv("VCA_PYANNOTE_HF_TIMEOUT_SECONDS", "120"))
+    pyannote_worker_threads: int = int(os.getenv("VCA_PYANNOTE_WORKER_THREADS", "4"))
+    pyannote_stub_torch_dynamo: bool = os.getenv("VCA_PYANNOTE_STUB_TORCH_DYNAMO", "true").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     cors_origin: str = os.getenv("VCA_CORS_ORIGIN", "http://localhost:5173")
 
 

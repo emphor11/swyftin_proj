@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import queue
 import re
 import threading
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,6 +21,7 @@ from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
 
 from .config import Settings, get_settings
+from .transcriber import get_pyannote_worker_manager
 
 
 REPORT_FORMATS = {
@@ -30,11 +33,37 @@ REPORT_FORMATS = {
 ALLOWED_AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".webm"}
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> Any:
+    manager = get_pyannote_worker_manager()
+
+    def warmup_pyannote() -> None:
+        try:
+            manager.warmup(settings)
+        except Exception as exc:  # noqa: BLE001 - backend should still run with diarization fallback.
+            logger.warning("Pyannote worker warmup failed; fallback diarization remains available: %s", exc)
+            manager.mark_unavailable(str(exc))
+
+    warmup_thread = threading.Thread(
+        target=warmup_pyannote,
+        name="pyannote-worker-warmup",
+        daemon=True,
+    )
+    warmup_thread.start()
+
+    try:
+        yield
+    finally:
+        await asyncio.to_thread(manager.terminate)
 
 app = FastAPI(
     title="AI-Powered Voice Call Analysis API",
     version="0.1.0",
     description="Upload call recordings and generate structured coaching reports.",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
