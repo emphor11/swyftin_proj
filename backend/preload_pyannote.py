@@ -95,6 +95,23 @@ def _install_torch_dynamo_stub(torch_module) -> None:
     _log("torch._dynamo stub installed.")
 
 
+def _patch_huggingface_hub_compat(huggingface_hub_module) -> None:
+    """Allow pyannote 3.x to run with huggingface-hub 1.x."""
+    original_download = huggingface_hub_module.hf_hub_download
+
+    def compat_hf_hub_download(*args, **kwargs):
+        auth_token = kwargs.pop("use_auth_token", None)
+        if auth_token and "token" not in kwargs:
+            kwargs["token"] = auth_token
+        return original_download(*args, **kwargs)
+
+    huggingface_hub_module.hf_hub_download = compat_hf_hub_download
+    file_download = getattr(huggingface_hub_module, "file_download", None)
+    if file_download is not None:
+        file_download.hf_hub_download = compat_hf_hub_download
+    _log("huggingface_hub use_auth_token compatibility patch installed.")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Preload and cache Pyannote diarization models.")
     parser.add_argument(
@@ -142,9 +159,10 @@ def main() -> int:
 
         _log("matplotlib imported.")
         _log("Importing huggingface_hub...")
-        import huggingface_hub  # noqa: F401
+        import huggingface_hub
 
         _log("huggingface_hub imported.")
+        _patch_huggingface_hub_compat(huggingface_hub)
         _log("Importing lightning_fabric...")
         import lightning_fabric  # noqa: F401
 

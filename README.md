@@ -6,7 +6,7 @@ End-to-end voice call analysis pipeline that accepts an audio recording, normali
 
 This project has a working CLI, FastAPI backend, SSE progress stream, report generation, and Vite/React dashboard. The default Phi-3 path uses `mlx-lm` on Apple Silicon for local Metal-backed inference. `llama-cpp-python` remains available as a GGUF fallback runtime. Phi-3 mode is strict: if the local model cannot run, the request fails clearly instead of silently pretending a heuristic report came from Phi-3. Auto mode still falls back to the heuristic analyzer so demos never hang. Pyannote requires a Hugging Face token and accepted model terms; if it is unavailable, the pipeline falls back to speaker alternation.
 
-Docker support and the SLM justification document are planned deliverables, but they are not present yet.
+Docker support is still a planned deliverable. The SLM choice writeup is available at `docs/justification.md`.
 
 ## Architecture
 
