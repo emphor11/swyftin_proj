@@ -13,42 +13,64 @@ from .merger import format_timestamp
 
 
 ANALYSIS_PROMPT = """<|system|>
-You are an expert call center quality analyst. Respond with ONLY valid JSON. No markdown, no preamble, no explanation.
+You are a senior call center quality analyst. You output ONLY one valid JSON object. Never include prose, apologies, markdown, code fences, headings, or comments. Your reply must begin with {{ and end with }}.
 <|end|>
 <|user|>
-Analyze this two-speaker customer support call transcript. Return exactly one JSON object with these keys:
+Below is a transcript of a two-speaker customer support call (Agent and Customer). Read it carefully, then return your analysis as one JSON object that follows the SCHEMA below.
+
+SCHEMA - the keys, structure, and value types are fixed. The example values shown are illustrative only. Replace every value with content derived from the transcript.
 
 {{
-  "call_summary": "2-3 sentence overview of the issue, agent actions, and outcome",
-  "overall_sentiment": "positive | negative | neutral | mixed",
-  "customer_sentiment_journey": "brief journey such as frustrated -> reassured",
-  "agent_score": 1,
+  "call_summary": "Two or three sentences covering what the customer needed, what the agent did, and how the call ended.",
+  "overall_sentiment": "positive",
+  "customer_sentiment_journey": "Short arc such as frustrated -> reassured -> satisfied.",
+  "agent_score": 7,
   "score_breakdown": {{
-    "greeting_and_opening": 1,
-    "active_listening": 1,
-    "problem_resolution": 1,
-    "professionalism": 1,
-    "closing": 1
+    "greeting_and_opening": 8,
+    "active_listening": 7,
+    "problem_resolution": 7,
+    "professionalism": 8,
+    "closing": 6
   }},
-  "strengths": ["2-3 specific strengths tied to transcript details"],
-  "improvement_areas": ["2-3 specific weaknesses and what to do differently"],
-  "recommended_next_steps": ["2-3 concrete coaching tips"],
+  "strengths": [
+    "Concrete thing the agent did well, referencing what they actually said.",
+    "Another specific strength tied to a real moment in the transcript.",
+    "A third specific strength if the evidence supports it."
+  ],
+  "improvement_areas": [
+    "Specific weakness, plus what the agent should do differently next time.",
+    "Another concrete improvement tied to a real moment in the transcript."
+  ],
+  "recommended_next_steps": [
+    "One concrete coaching action the agent can apply on the next call.",
+    "Another concrete coaching action.",
+    "A third coaching action if useful."
+  ],
   "key_moments": [
     {{
-      "timestamp_range": "0:00-0:10",
-      "speaker": "Agent | Customer",
-      "description": "what happened and why it matters",
-      "impact": "positive | negative | neutral"
+      "timestamp_range": "use a real range from the transcript such as 0:18-0:32",
+      "speaker": "Agent",
+      "description": "What happened in this moment and why it matters.",
+      "impact": "positive"
     }}
   ],
-  "compliance_flags": ["empty array if no issues"]
+  "compliance_flags": []
 }}
 
-Rules:
-- Return valid JSON only.
-- Use integer scores from 1 to 10.
-- Keep array items concise but specific.
-- If evidence is missing, make a cautious note instead of inventing facts.
+RULES:
+- Reply with exactly one JSON object. No text before it. No text after it.
+- Use the exact key names shown above. Use double quotes around every key and string value.
+- All scores are integers from 1 to 10. Do not return decimals or strings for scores.
+- Do not copy the example score values from the schema. Calculate every score from transcript evidence.
+- The agent_score must be consistent with the score_breakdown and should be close to the rounded average of the five category scores.
+- Be fair and conservative. Use 9 or 10 only when the transcript shows clearly excellent performance.
+- "overall_sentiment" must be one of: positive, negative, neutral, mixed.
+- "impact" inside key_moments must be one of: positive, negative, neutral.
+- Use 2 or 3 items in strengths, improvement_areas, and recommended_next_steps.
+- Use 1 to 3 entries in key_moments. Copy timestamp_range from the transcript exactly.
+- "compliance_flags" is [] when no issues are present, otherwise a short list of issue descriptions.
+- Strengths and improvement_areas must reference specific things the agent said or did in THIS transcript. Do not give generic advice that would fit any call.
+- Never output a category name alone, for example "active_listening", as a strength or improvement.
 
 TRANSCRIPT:
 {transcript}
