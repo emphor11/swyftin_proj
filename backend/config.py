@@ -38,6 +38,8 @@ class Settings:
     max_transcript_chars: int = int(os.getenv("VCA_MAX_TRANSCRIPT_CHARS", "12000"))
     llama_threads: int = int(os.getenv("VCA_LLAMA_THREADS", "4"))
     llama_ctx: int = int(os.getenv("VCA_LLAMA_CTX", "4096"))
+    pyannote_timeout_seconds: int = int(os.getenv("VCA_PYANNOTE_TIMEOUT_SECONDS", "90"))
+    pyannote_num_speakers: int = int(os.getenv("VCA_PYANNOTE_NUM_SPEAKERS", "2"))
     cors_origin: str = os.getenv("VCA_CORS_ORIGIN", "http://localhost:5173")
 
 

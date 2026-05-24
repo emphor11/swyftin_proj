@@ -15,7 +15,7 @@ export default function App() {
   const [progressEvents, setProgressEvents] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState("");
-  const [analyzerMode, setAnalyzerMode] = useState("auto");
+  const [analyzerMode, setAnalyzerMode] = useState("heuristic");
   const [isLoadingReports, setIsLoadingReports] = useState(true);
 
   useEffect(() => {

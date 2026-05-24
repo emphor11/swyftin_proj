@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
+import os
 import subprocess
+import sys
+import threading
 import uuid
 from functools import lru_cache
 from pathlib import Path
@@ -15,6 +19,50 @@ class TranscriptionError(RuntimeError):
 
 class DiarizationError(RuntimeError):
     pass
+
+
+_WHISPER_TRANSCRIBE_LOCK = threading.Lock()
+
+
+PYANNOTE_WORKER_CODE = r"""
+import json
+import os
+import sys
+
+try:
+    import numpy as np
+
+    if not hasattr(np, "NAN"):
+        np.NAN = np.nan
+except ImportError:
+    pass
+
+from pyannote.audio import Pipeline
+
+pipeline = Pipeline.from_pretrained(
+    "pyannote/speaker-diarization-3.1",
+    use_auth_token=os.environ.get("HF_TOKEN") or None,
+)
+if pipeline is None:
+    raise RuntimeError("Could not load pyannote/speaker-diarization-3.1.")
+
+num_speakers = int(sys.argv[2]) if len(sys.argv) > 2 else 2
+diarization_kwargs = {}
+if num_speakers > 0:
+    diarization_kwargs["num_speakers"] = num_speakers
+
+segments = []
+for turn, _, speaker in pipeline(sys.argv[1], **diarization_kwargs).itertracks(yield_label=True):
+    segments.append(
+        {
+            "start": float(turn.start),
+            "end": float(turn.end),
+            "speaker": str(speaker),
+        }
+    )
+
+print("__PYANNOTE_SEGMENTS__" + json.dumps(segments))
+"""
 
 
 def get_audio_duration(audio_path: str | Path) -> float:
@@ -78,7 +126,8 @@ def transcribe(audio_path: str | Path, settings: Settings) -> list[dict]:
     kwargs = {}
     if settings.whisper_language:
         kwargs["language"] = settings.whisper_language
-    result = model.transcribe(str(audio_path), **kwargs)
+    with _WHISPER_TRANSCRIBE_LOCK:
+        result = model.transcribe(str(audio_path), **kwargs)
     segments = []
     for item in result.get("segments", []):
         text = str(item.get("text", "")).strip()
@@ -94,49 +143,40 @@ def transcribe(audio_path: str | Path, settings: Settings) -> list[dict]:
     return segments
 
 
-@lru_cache(maxsize=1)
-def _load_pyannote_pipeline(token: str | None):
-    try:
-        import numpy as np
-
-        if not hasattr(np, "NAN"):
-            np.NAN = np.nan
-    except ImportError:
-        pass
+def diarize(audio_path: str | Path, settings: Settings) -> list[dict]:
+    env = os.environ.copy()
+    if settings.hf_token:
+        env["HF_TOKEN"] = settings.hf_token
 
     try:
-        from pyannote.audio import Pipeline
-    except ImportError as exc:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                PYANNOTE_WORKER_CODE,
+                str(audio_path),
+                str(settings.pyannote_num_speakers),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=settings.pyannote_timeout_seconds,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as exc:
         raise DiarizationError(
-            "pyannote.audio is not installed. Falling back to turn alternation."
+            f"Pyannote diarization timed out after {settings.pyannote_timeout_seconds}s."
         ) from exc
 
-    pipeline = Pipeline.from_pretrained(
-        "pyannote/speaker-diarization-3.1",
-        use_auth_token=token,
-    )
-    if pipeline is None:
-        raise DiarizationError(
-            "Could not load pyannote/speaker-diarization-3.1. Check HF_TOKEN and model terms."
-        )
-    return pipeline
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip()
+        raise DiarizationError(message or "Pyannote diarization failed.")
 
+    for line in result.stdout.splitlines():
+        if line.startswith("__PYANNOTE_SEGMENTS__"):
+            return json.loads(line.removeprefix("__PYANNOTE_SEGMENTS__"))
 
-def diarize(audio_path: str | Path, settings: Settings) -> list[dict]:
-    pipeline = _load_pyannote_pipeline(settings.hf_token)
-    diarization = pipeline(str(audio_path))
-    segments: list[dict] = []
-
-    for turn, _, speaker in diarization.itertracks(yield_label=True):
-        segments.append(
-            {
-                "start": float(turn.start),
-                "end": float(turn.end),
-                "speaker": str(speaker),
-            }
-        )
-
-    return segments
+    raise DiarizationError("Pyannote completed but did not return speaker segments.")
 
 
 def diarize_with_fallback(
