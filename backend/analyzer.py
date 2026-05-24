@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
+import queue
 import re
+import traceback
 from functools import lru_cache
 from typing import Any
 
@@ -9,51 +12,43 @@ from .config import Settings
 from .merger import format_timestamp
 
 
-SUMMARY_PROMPT = """<|system|>
-You are a call center quality analyst. Respond with ONLY valid JSON. No markdown, no explanation.
+ANALYSIS_PROMPT = """<|system|>
+You are an expert call center quality analyst. Respond with ONLY valid JSON. No markdown, no preamble, no explanation.
 <|end|>
 <|user|>
-Analyze this call transcript. Return JSON with these exact keys:
-- "call_summary": 2-3 sentence overview
-- "overall_sentiment": one of positive/negative/neutral/mixed
-- "customer_sentiment_journey": e.g. "frustrated -> satisfied"
-- "agent_score": integer 1-10
-- "score_reasoning": one sentence explaining the score
+Analyze this two-speaker customer support call transcript. Return exactly one JSON object with these keys:
 
-TRANSCRIPT:
-{transcript}
-<|end|>
+{{
+  "call_summary": "2-3 sentence overview of the issue, agent actions, and outcome",
+  "overall_sentiment": "positive | negative | neutral | mixed",
+  "customer_sentiment_journey": "brief journey such as frustrated -> reassured",
+  "agent_score": 1,
+  "score_breakdown": {{
+    "greeting_and_opening": 1,
+    "active_listening": 1,
+    "problem_resolution": 1,
+    "professionalism": 1,
+    "closing": 1
+  }},
+  "strengths": ["2-3 specific strengths tied to transcript details"],
+  "improvement_areas": ["2-3 specific weaknesses and what to do differently"],
+  "recommended_next_steps": ["2-3 concrete coaching tips"],
+  "key_moments": [
+    {{
+      "timestamp_range": "0:00-0:10",
+      "speaker": "Agent | Customer",
+      "description": "what happened and why it matters",
+      "impact": "positive | negative | neutral"
+    }}
+  ],
+  "compliance_flags": ["empty array if no issues"]
+}}
 
-<|assistant|>
-"""
-
-COACHING_PROMPT = """<|system|>
-You are a call center quality analyst. Respond with ONLY valid JSON. No markdown, no explanation.
-<|end|>
-<|user|>
-This call was scored {agent_score}/10. Summary: {call_summary}
-
-Based on the transcript below, return JSON with these exact keys:
-- "strengths": array of 2-3 specific strengths with references to what the agent said or did
-- "improvement_areas": array of 2-3 specific weaknesses with what to do differently
-- "recommended_next_steps": array of 2-3 actionable coaching tips
-
-TRANSCRIPT:
-{transcript}
-<|end|>
-<|assistant|>
-"""
-
-MOMENTS_PROMPT = """<|system|>
-You are a call center quality analyst. Respond with ONLY valid JSON. No markdown, no explanation.
-<|end|>
-<|user|>
-This call was scored {agent_score}/10.
-
-Based on the transcript below, return JSON with these exact keys:
-- "score_breakdown": object with keys greeting_and_opening, active_listening, problem_resolution, professionalism, closing (each integer 1-10)
-- "key_moments": array of 1-3 objects with keys timestamp_range, speaker, description, impact
-- "compliance_flags": array of strings (empty array if no issues)
+Rules:
+- Return valid JSON only.
+- Use integer scores from 1 to 10.
+- Keep array items concise but specific.
+- If evidence is missing, make a cautious note instead of inventing facts.
 
 TRANSCRIPT:
 {transcript}
@@ -95,20 +90,52 @@ def parse_json_response(raw: str) -> dict[str, Any]:
     return _parse_json(raw)
 
 
-def _format_transcript(blocks: list[dict], max_chars: int = 3000) -> str:
+def _truncate_transcript(transcript: str, max_chars: int) -> str:
+    if len(transcript) <= max_chars:
+        return transcript
+
+    marker = "[transcript truncated]"
+    budget = max(0, max_chars - len(marker) - 2)
+    head_budget = budget // 2
+    tail_budget = budget - head_budget
+    lines = transcript.splitlines()
+
+    head_lines: list[str] = []
+    head_size = 0
+    for line in lines:
+        next_size = head_size + len(line) + (1 if head_lines else 0)
+        if next_size > head_budget:
+            break
+        head_lines.append(line)
+        head_size = next_size
+
+    tail_lines: list[str] = []
+    tail_size = 0
+    for line in reversed(lines):
+        next_size = tail_size + len(line) + (1 if tail_lines else 0)
+        if next_size > tail_budget:
+            break
+        tail_lines.append(line)
+        tail_size = next_size
+
+    if head_lines or tail_lines:
+        return "\n".join([*head_lines, marker, *reversed(tail_lines)]).strip()
+
+    return transcript[:max_chars].rstrip()
+
+
+def _format_transcript(blocks: list[dict], max_chars: int = 2500) -> str:
     lines = []
     for block in blocks:
         speaker = str(block.get("speaker", "Speaker")).strip() or "Speaker"
         text = str(block.get("text", "")).strip()
         if text:
-            lines.append(f"[{speaker}]: {text}")
+            start = format_timestamp(block.get("start", 0))
+            end = format_timestamp(block.get("end", 0))
+            lines.append(f"[{start}-{end}] {speaker}: {text}")
 
     transcript = "\n".join(lines)
-    if len(transcript) <= max_chars:
-        return transcript
-
-    marker = "\n[transcript truncated]"
-    return transcript[: max_chars - len(marker)].rstrip() + marker
+    return _truncate_transcript(transcript, max_chars)
 
 
 def normalize_analysis_schema(analysis: dict[str, Any]) -> dict[str, Any]:
@@ -178,71 +205,268 @@ def _clamp_score(value: Any) -> int:
 
 
 @lru_cache(maxsize=1)
-def _load_llm(model_path: str):
+def _load_llama_cpp(model_path: str, n_ctx: int, n_threads: int, n_gpu_layers: int):
     try:
         from llama_cpp import Llama
     except ImportError as exc:
         raise RuntimeError("llama-cpp-python is not installed.") from exc
 
-    return Llama(
-        model_path=model_path,
-        n_ctx=4096,
-        n_threads=4,
-        n_gpu_layers=0,
-        verbose=False,
-    )
+    try:
+        return Llama(
+            model_path=model_path,
+            n_ctx=n_ctx,
+            n_threads=n_threads,
+            n_gpu_layers=n_gpu_layers,
+            verbose=False,
+        )
+    except Exception:
+        if n_gpu_layers == 0:
+            raise
+        return Llama(
+            model_path=model_path,
+            n_ctx=n_ctx,
+            n_threads=n_threads,
+            n_gpu_layers=0,
+            verbose=False,
+        )
 
 
-def _run_llm_json(llm: Any, prompt: str) -> dict[str, Any]:
+@lru_cache(maxsize=1)
+def _load_mlx_model(model_path: str):
+    try:
+        from mlx_lm import load
+    except Exception as exc:  # noqa: BLE001 - MLX fails early when Metal is not visible.
+        raise RuntimeError(f"mlx-lm is not available or cannot access Metal: {exc}") from exc
+
+    try:
+        return load(model_path)
+    except Exception as exc:  # noqa: BLE001 - surface HF/model/Metal failures cleanly.
+        raise RuntimeError(f"Could not load MLX model '{model_path}': {exc}") from exc
+
+
+def _run_llama_cpp_json(llm: Any, prompt: str, max_tokens: int, temperature: float) -> dict[str, Any]:
     response = llm(
         prompt,
-        max_tokens=400,
-        temperature=0.3,
+        max_tokens=max_tokens,
+        temperature=temperature,
         stop=["<|end|>"],
     )
     raw_output = response["choices"][0]["text"].strip()
-    return _parse_json(raw_output)
+    parsed = _parse_json(raw_output)
+    if not isinstance(parsed, dict):
+        return {
+            "error": "parse_failed",
+            "raw": raw_output,
+        }
+    return parsed
 
 
-def _analyze_with_llm(transcript_blocks: list[dict], settings: Settings) -> dict[str, Any]:
-    transcript = _format_transcript(transcript_blocks, max_chars=3000)
-    llm = _load_llm(str(settings.phi3_model_path))
+def _run_mlx_json(model: Any, tokenizer: Any, prompt: str, max_tokens: int, temperature: float) -> dict[str, Any]:
+    try:
+        from mlx_lm import generate
+        from mlx_lm.sample_utils import make_sampler
+    except Exception as exc:  # noqa: BLE001 - MLX import can fail when Metal is unavailable.
+        raise RuntimeError(f"mlx-lm generation is not available: {exc}") from exc
 
-    summary = _run_llm_json(llm, SUMMARY_PROMPT.format(transcript=transcript))
-    agent_score = _clamp_score(summary.get("agent_score", 5))
-    call_summary = str(summary.get("call_summary", "Summary unavailable."))
-
-    coaching = _run_llm_json(
-        llm,
-        COACHING_PROMPT.format(
-            transcript=transcript,
-            agent_score=agent_score,
-            call_summary=call_summary,
-        ),
+    sampler = make_sampler(temp=temperature, top_p=0.9 if temperature > 0 else 0.0)
+    raw_output = generate(
+        model,
+        tokenizer,
+        prompt=prompt,
+        max_tokens=max_tokens,
+        sampler=sampler,
+        verbose=False,
     )
-    moments = _run_llm_json(
-        llm,
-        MOMENTS_PROMPT.format(
-            transcript=transcript,
-            agent_score=agent_score,
-        ),
+
+    raw_text = str(raw_output).strip()
+    parsed = _parse_json(raw_text)
+    if not isinstance(parsed, dict):
+        return {
+            "error": "parse_failed",
+            "raw": raw_text,
+        }
+    return parsed
+
+
+def _analyze_with_llm_in_worker(payload: dict[str, Any]) -> dict[str, Any]:
+    transcript_blocks = list(payload["transcript_blocks"])
+    transcript = _format_transcript(
+        transcript_blocks,
+        max_chars=int(payload["max_transcript_chars"]),
     )
+    prompt = ANALYSIS_PROMPT.format(transcript=transcript)
+    runtime = str(payload.get("llm_runtime", "llama_cpp")).strip().lower()
+    max_tokens = int(payload["llama_max_tokens"])
 
-    analysis: dict[str, Any] = {}
-    errors = {}
-    for name, result in (("summary", summary), ("coaching", coaching), ("moments", moments)):
-        if "error" in result:
-            errors[name] = result
-            continue
-        analysis.update(result)
+    if runtime == "mlx":
+        model, tokenizer = _load_mlx_model(str(payload["mlx_model_path"]))
+        runner = lambda temperature: _run_mlx_json(
+            model,
+            tokenizer,
+            prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        model_name = str(payload["mlx_model_path"])
+    elif runtime == "llama_cpp":
+        llm = _load_llama_cpp(
+            str(payload["model_path"]),
+            int(payload["llama_ctx"]),
+            int(payload["llama_threads"]),
+            int(payload["llama_gpu_layers"]),
+        )
+        runner = lambda temperature: _run_llama_cpp_json(
+            llm,
+            prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        model_name = str(payload["model_name"])
+    else:
+        raise RuntimeError("VCA_LLM_RUNTIME must be one of: mlx, llama_cpp")
 
-    if errors:
-        analysis["llm_errors"] = errors
+    analysis = runner(0.3)
+
+    if "error" in analysis:
+        retry = runner(0.0)
+        if "error" in retry:
+            return {
+                "error": "parse_failed",
+                "raw": retry.get("raw") or analysis.get("raw", ""),
+            }
+        analysis = retry
 
     analysis = enrich_analysis_from_transcript(analysis, transcript_blocks)
     analysis["analysis_mode"] = "llm"
-    analysis["model"] = settings.phi3_model_path.name
+    analysis["model"] = model_name
     return analysis
+
+
+def _llm_worker_entry(payload: dict[str, Any], result_queue: multiprocessing.Queue) -> None:
+    try:
+        analysis = _analyze_with_llm_in_worker(payload)
+        if "error" in analysis:
+            result_queue.put(
+                {
+                    "ok": False,
+                    "error": str(analysis.get("error", "unknown Phi-3 error")),
+                    "raw": analysis.get("raw", ""),
+                }
+            )
+            return
+
+        result_queue.put(
+            {
+                "ok": True,
+                "analysis": analysis,
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 - worker errors must be returned to parent safely.
+        result_queue.put(
+            {
+                "ok": False,
+                "error": str(exc),
+                "traceback": traceback.format_exc(limit=8),
+            }
+        )
+
+
+def _fallback_analysis(blocks: list[dict], mode: str, warning: str) -> dict[str, Any]:
+    analysis = heuristic_analysis(blocks)
+    analysis["analysis_mode"] = mode
+    analysis["model"] = "rule-based fallback"
+    analysis.setdefault("pipeline_warnings", []).append(warning)
+    return analysis
+
+
+def _raise_or_fallback(blocks: list[dict], mode: str, warning: str, allow_fallback: bool) -> dict[str, Any]:
+    if allow_fallback:
+        return _fallback_analysis(blocks, mode, warning)
+    strict_message = warning.replace("; heuristic fallback used.", ".").replace(" heuristic fallback used.", "")
+    raise RuntimeError(strict_message)
+
+
+def _terminate_process(process: multiprocessing.Process) -> None:
+    if not process.is_alive():
+        return
+    process.terminate()
+    process.join(timeout=5)
+    if process.is_alive():
+        process.kill()
+        process.join(timeout=2)
+
+
+def _analyze_with_llm(
+    transcript_blocks: list[dict],
+    settings: Settings,
+    *,
+    allow_fallback: bool,
+) -> dict[str, Any]:
+    payload = {
+        "transcript_blocks": transcript_blocks,
+        "llm_runtime": settings.llm_runtime,
+        "model_path": str(settings.phi3_model_path),
+        "model_name": settings.phi3_model_path.name,
+        "mlx_model_path": settings.mlx_model_path,
+        "max_transcript_chars": settings.max_transcript_chars,
+        "llama_ctx": settings.llama_ctx,
+        "llama_threads": settings.llama_threads,
+        "llama_gpu_layers": settings.llama_gpu_layers,
+        "llama_max_tokens": settings.llama_max_tokens,
+    }
+
+    context = multiprocessing.get_context("spawn")
+    result_queue = context.Queue(maxsize=1)
+    process = context.Process(
+        target=_llm_worker_entry,
+        args=(payload, result_queue),
+        name="vca-phi3-analyzer",
+    )
+    process.start()
+    process.join(timeout=max(1, settings.llama_timeout_seconds))
+
+    if process.is_alive():
+        _terminate_process(process)
+        result_queue.close()
+        return _raise_or_fallback(
+            transcript_blocks,
+            "llm-timeout-fallback",
+            f"Phi-3 analysis timed out after {settings.llama_timeout_seconds}s; heuristic fallback used.",
+            allow_fallback,
+        )
+
+    try:
+        result = result_queue.get(timeout=2)
+    except queue.Empty:
+        return _raise_or_fallback(
+            transcript_blocks,
+            "llm-error-fallback",
+            f"Phi-3 worker exited without a result; heuristic fallback used. Exit code: {process.exitcode}",
+            allow_fallback,
+        )
+    finally:
+        result_queue.close()
+
+    if result.get("ok"):
+        analysis = result.get("analysis", {})
+        if isinstance(analysis, dict):
+            return analysis
+
+    error = str(result.get("error", "unknown Phi-3 error"))
+    if error == "parse_failed":
+        return _raise_or_fallback(
+            transcript_blocks,
+            "llm-parse-failure-fallback",
+            "Phi-3 returned invalid JSON; heuristic fallback used.",
+            allow_fallback,
+        )
+
+    return _raise_or_fallback(
+        transcript_blocks,
+        "llm-error-fallback",
+        f"Phi-3 analysis failed: {error}; heuristic fallback used.",
+        allow_fallback,
+    )
 
 
 def analyze_transcript(
@@ -251,13 +475,19 @@ def analyze_transcript(
     analyzer_mode: str | None = None,
 ) -> dict[str, Any]:
     mode = (analyzer_mode or settings.analyzer_mode).lower()
+    runtime = settings.llm_runtime.strip().lower()
 
     if mode not in {"auto", "llm", "heuristic"}:
         raise ValueError("analyzer_mode must be one of: auto, llm, heuristic")
 
-    if mode == "auto" and settings.phi3_model_path.exists():
+    if runtime not in {"mlx", "llama_cpp"}:
+        raise ValueError("VCA_LLM_RUNTIME must be one of: mlx, llama_cpp")
+
+    llm_configured = runtime == "mlx" or settings.phi3_model_path.exists()
+
+    if mode == "auto" and llm_configured:
         try:
-            return _analyze_with_llm(transcript_blocks, settings)
+            return _analyze_with_llm(transcript_blocks, settings, allow_fallback=True)
         except Exception as exc:  # noqa: BLE001 - auto mode should keep the demo path usable.
             analysis = heuristic_analysis(transcript_blocks)
             analysis["analysis_mode"] = "heuristic-auto-fallback"
@@ -267,13 +497,14 @@ def analyze_transcript(
             )
             return analysis
 
-    if mode == "llm" and settings.phi3_model_path.exists():
-        return _analyze_with_llm(transcript_blocks, settings)
+    if mode == "llm" and llm_configured:
+        return _analyze_with_llm(transcript_blocks, settings, allow_fallback=False)
 
     if mode == "llm":
         raise FileNotFoundError(
-            f"Phi-3 model file not found at {settings.phi3_model_path}. "
-            "Download the GGUF file or use --analyzer-mode heuristic for a smoke test."
+            f"Phi-3 GGUF model file not found at {settings.phi3_model_path}. "
+            "Set VCA_LLM_RUNTIME=mlx to use the local MLX Phi-3 model, "
+            "download the GGUF file, or use --analyzer-mode heuristic for a smoke test."
         )
 
     analysis = heuristic_analysis(transcript_blocks)

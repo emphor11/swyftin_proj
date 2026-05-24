@@ -89,6 +89,29 @@ def _install_torch_dynamo_stub(torch_module) -> None:
     _log_phase("torch._dynamo stub installed")
 
 
+def _patch_huggingface_hub_compat(huggingface_hub_module) -> None:
+    """Allow pyannote 3.x to run with huggingface-hub 1.x.
+
+    pyannote.audio 3.3.1 still passes use_auth_token=... to hf_hub_download().
+    huggingface-hub 1.x renamed that argument to token=..., and mlx-lm pulls in
+    hub 1.x. Patch only the worker process so Pyannote can keep using its older
+    call sites without poisoning the rest of the app.
+    """
+    original_download = huggingface_hub_module.hf_hub_download
+
+    def compat_hf_hub_download(*args, **kwargs):
+        auth_token = kwargs.pop("use_auth_token", None)
+        if auth_token and "token" not in kwargs:
+            kwargs["token"] = auth_token
+        return original_download(*args, **kwargs)
+
+    huggingface_hub_module.hf_hub_download = compat_hf_hub_download
+    file_download = getattr(huggingface_hub_module, "file_download", None)
+    if file_download is not None:
+        file_download.hf_hub_download = compat_hf_hub_download
+    _log_phase("huggingface_hub use_auth_token compatibility patch installed")
+
+
 def _create_silent_wav() -> Path:
     handle = tempfile.NamedTemporaryFile(prefix="pyannote_warmup_", suffix=".wav", delete=False)
     path = Path(handle.name)
@@ -130,9 +153,10 @@ def _load_pipeline():
 
         _log_phase("matplotlib imported")
         _log_phase("importing huggingface_hub")
-        import huggingface_hub  # noqa: F401
+        import huggingface_hub
 
         _log_phase("huggingface_hub imported")
+        _patch_huggingface_hub_compat(huggingface_hub)
         _log_phase("importing lightning_fabric")
         import lightning_fabric  # noqa: F401
 
