@@ -212,14 +212,16 @@ def _should_flip_fallback_speaker(previous: dict, current: dict) -> bool:
     previous_end = float(previous.get("end", previous.get("start", 0.0)))
     current_start = float(current.get("start", previous_end))
     gap = current_start - previous_end
+    previous_text = str(previous.get("text", "")).strip()
+    current_text = str(current.get("text", "")).strip()
+    current_words = re.findall(r"\b\w+\b", current_text)
+    if previous_text.endswith("?") and len(current_words) > 1:
+        return True
     if gap <= 0.5:
         return False
     if gap >= 2.0:
         return True
 
-    previous_text = str(previous.get("text", "")).strip()
-    current_text = str(current.get("text", "")).strip()
-    current_words = re.findall(r"\b\w+\b", current_text)
     return previous_text.endswith("?") or (gap > 0.8 and len(current_words) <= 3)
 
 

@@ -1,0 +1,33 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      VCA_ANALYZER_MODE: auto
+      VCA_LLM_RUNTIME: llama_cpp
+      VCA_CORS_ORIGIN: http://localhost:3000
+      VCA_PYANNOTE_TIMEOUT_SECONDS: 600
+      VCA_PYANNOTE_NUM_SPEAKERS: 2
+      VCA_LLAMA_TIMEOUT_SECONDS: 240
+      VCA_LLAMA_MAX_TOKENS: 1200
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/models:/app/backend/models
+      - ./output:/app/output
+      - ./uploads:/app/uploads
+      - hf-cache:/root/.cache/huggingface
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../Dockerfile.frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+
+volumes:
+  hf-cache:

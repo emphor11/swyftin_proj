@@ -5,6 +5,7 @@ from collections import deque
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -102,7 +103,79 @@ def transcribe(audio_path: str | Path, settings: Settings) -> list[dict]:
                 "text": text,
             }
         )
-    return segments
+    return _split_long_whisper_segments(segments)
+
+
+def _split_long_whisper_segments(
+    segments: list[dict],
+    max_duration_seconds: float = 18.0,
+    max_words: int = 45,
+) -> list[dict]:
+    split_segments: list[dict] = []
+    for segment in segments:
+        text = str(segment.get("text", "")).strip()
+        start = float(segment.get("start", 0.0))
+        end = float(segment.get("end", start))
+        duration = max(0.0, end - start)
+        words = re.findall(r"\S+", text)
+        if duration <= max_duration_seconds and len(words) <= max_words:
+            split_segments.append(segment)
+            continue
+
+        chunks = _split_text_into_chunks(text, max_words=max_words)
+        if len(chunks) <= 1:
+            split_segments.append(segment)
+            continue
+
+        total_chars = sum(len(chunk) for chunk in chunks) or 1
+        cursor = start
+        for index, chunk in enumerate(chunks):
+            if index == len(chunks) - 1:
+                chunk_end = end
+            else:
+                chunk_duration = duration * (len(chunk) / total_chars)
+                chunk_end = min(end, cursor + chunk_duration)
+            split_segments.append(
+                {
+                    "start": cursor,
+                    "end": chunk_end,
+                    "text": chunk,
+                }
+            )
+            cursor = chunk_end
+
+    return split_segments
+
+
+def _split_text_into_chunks(text: str, max_words: int = 45) -> list[str]:
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?])\s+", text.strip())
+        if sentence.strip()
+    ]
+    if len(sentences) <= 1:
+        sentences = [
+            part.strip()
+            for part in re.split(r"\s+(?=(?:Okay|Oh|Well|Yes|No|Thank you|You're welcome|I don't|I do)\b)", text)
+            if part.strip()
+        ]
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_words = 0
+    for sentence in sentences:
+        word_count = len(re.findall(r"\S+", sentence))
+        if current and current_words + word_count > max_words:
+            chunks.append(" ".join(current).strip())
+            current = [sentence]
+            current_words = word_count
+        else:
+            current.append(sentence)
+            current_words += word_count
+
+    if current:
+        chunks.append(" ".join(current).strip())
+    return chunks or [text.strip()]
 
 
 class PyannoteWorkerManager:

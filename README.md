@@ -6,7 +6,7 @@ End-to-end voice call analysis pipeline that accepts an audio recording, normali
 
 This project has a working CLI, FastAPI backend, SSE progress stream, report generation, and Vite/React dashboard. The default Phi-3 path uses `mlx-lm` on Apple Silicon for local Metal-backed inference. `llama-cpp-python` remains available as a GGUF fallback runtime. Phi-3 mode is strict: if the local model cannot run, the request fails clearly instead of silently pretending a heuristic report came from Phi-3. Auto mode still falls back to the heuristic analyzer so demos never hang. Pyannote requires a Hugging Face token and accepted model terms; if it is unavailable, the pipeline falls back to speaker alternation.
 
-Docker support is still a planned deliverable. The SLM choice writeup is available at `docs/justification.md`.
+Docker Compose support is included for reproducible frontend/backend setup. The SLM choice writeup is available at `docs/justification.md`.
 
 ## Architecture
 
@@ -153,6 +153,49 @@ http://127.0.0.1:5173
 ```
 
 The Vite dev server proxies `/api` requests to `http://127.0.0.1:8000`.
+
+## Docker Compose
+
+Docker is available as an optional one-command setup for the backend and frontend:
+
+```bash
+docker compose up --build
+```
+
+Make sure Docker Desktop is running before executing this command. The first backend build can take a while because it installs Torch, Whisper, Pyannote, and llama-cpp-python.
+
+Then open:
+
+```text
+http://localhost:3000
+```
+
+The Docker frontend is an nginx container that serves the built React app and proxies `/api` requests to the FastAPI backend container. Generated reports and uploaded files are mounted back to the local `output/` and `uploads/` folders.
+
+Docker uses CPU-only Pyannote, so diarization can be slower than the local macOS path. The compose file sets `VCA_PYANNOTE_TIMEOUT_SECONDS=600` to give Pyannote enough time to finish before falling back to speaker alternation.
+
+Important Docker limitation on Apple Silicon: Docker Desktop runs Linux containers inside a VM, so it cannot use the host Mac's MLX/Metal runtime. The compose setup therefore defaults to:
+
+```text
+VCA_LLM_RUNTIME=llama_cpp
+VCA_ANALYZER_MODE=auto
+```
+
+That means Fast mode works, Auto mode falls back safely if a GGUF model is not mounted, and Phi-3 mode in Docker requires the GGUF model at:
+
+```text
+backend/models/Phi-3-mini-4k-instruct-q4.gguf
+```
+
+Phi-3 through Docker is CPU-oriented unless you deploy on a VM with an appropriate accelerator and runtime configuration. For the fastest Phi-3 experience on an Apple Silicon Mac, run the backend locally with `VCA_LLM_RUNTIME=mlx` instead of Docker.
+
+To use Pyannote inside Docker, provide `HF_TOKEN` in your shell or `.env` file:
+
+```bash
+HF_TOKEN=hf_your_token_here docker compose up --build
+```
+
+If no token is available, the pipeline still completes using fallback speaker alternation.
 
 ## CLI Usage
 
