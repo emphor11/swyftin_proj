@@ -53,6 +53,12 @@ class Settings:
     pyannote_worker_startup_timeout_seconds: int = int(
         os.getenv("VCA_PYANNOTE_WORKER_STARTUP_TIMEOUT_SECONDS", "300")
     )
+    pyannote_warmup_on_startup: bool = os.getenv("VCA_PYANNOTE_WARMUP_ON_STARTUP", "true").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     pyannote_hf_timeout_seconds: int = int(os.getenv("VCA_PYANNOTE_HF_TIMEOUT_SECONDS", "120"))
     pyannote_worker_threads: int = int(os.getenv("VCA_PYANNOTE_WORKER_THREADS", "4"))
     pyannote_device: str = os.getenv("VCA_PYANNOTE_DEVICE", "auto")

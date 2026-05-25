@@ -41,19 +41,20 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> Any:
     manager = get_pyannote_worker_manager()
 
-    def warmup_pyannote() -> None:
-        try:
-            manager.warmup(settings)
-        except Exception as exc:  # noqa: BLE001 - backend should still run with diarization fallback.
-            logger.warning("Pyannote worker warmup failed; fallback diarization remains available: %s", exc)
-            manager.mark_unavailable(str(exc))
+    if settings.pyannote_warmup_on_startup:
+        def warmup_pyannote() -> None:
+            try:
+                manager.warmup(settings)
+            except Exception as exc:  # noqa: BLE001 - backend should still run with diarization fallback.
+                logger.warning("Pyannote worker warmup failed; fallback diarization remains available: %s", exc)
+                manager.mark_unavailable(str(exc))
 
-    warmup_thread = threading.Thread(
-        target=warmup_pyannote,
-        name="pyannote-worker-warmup",
-        daemon=True,
-    )
-    warmup_thread.start()
+        warmup_thread = threading.Thread(
+            target=warmup_pyannote,
+            name="pyannote-worker-warmup",
+            daemon=True,
+        )
+        warmup_thread.start()
 
     try:
         yield

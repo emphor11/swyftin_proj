@@ -230,6 +230,7 @@ VCA_WHISPER_MODEL=small
 VCA_WHISPER_LANGUAGE=en
 VCA_PYANNOTE_NUM_SPEAKERS=2
 VCA_PYANNOTE_TIMEOUT_SECONDS=240
+VCA_PYANNOTE_WARMUP_ON_STARTUP=false
 VCA_MAX_AUDIO_SECONDS=120
 VCA_CORS_ORIGIN=*
 ```
@@ -347,6 +348,7 @@ transcript.txt
 | `VCA_PYANNOTE_TIMEOUT_SECONDS` | `150` | Maximum time spent trying Pyannote before falling back to speaker alternation. |
 | `VCA_PYANNOTE_NUM_SPEAKERS` | `2` | Forces Pyannote to cluster at exactly N speakers. Set to `0` to let Pyannote estimate speaker count, which is slower but useful for multi-party calls. |
 | `VCA_PYANNOTE_WORKER_STARTUP_TIMEOUT_SECONDS` | `300` | Maximum time for the persistent Pyannote worker to load imports/models and report ready. |
+| `VCA_PYANNOTE_WARMUP_ON_STARTUP` | `true` | Starts Pyannote during FastAPI startup when true. Hosted Modal sets this to `false` so the public page loads before model warmup. |
 | `VCA_PYANNOTE_WORKER_WARM_FORWARD` | `false` | Optional `true`/`false` flag. When true, the worker runs a tiny silent-audio forward pass before reporting ready; disabled by default because it can make startup too slow on CPU. |
 | `VCA_PYANNOTE_HF_TIMEOUT_SECONDS` | `120` | Hugging Face hub network timeout used by the worker. Increase this for manual preload runs if the model is not cached yet. |
 | `VCA_PYANNOTE_WORKER_THREADS` | `4` | Thread cap for Pyannote worker numerical libraries (`OMP`, `MKL`, `vecLib`, and `numexpr`). |
