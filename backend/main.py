@@ -17,11 +17,12 @@ os.environ.setdefault("PYDANTIC_DISABLE_PLUGINS", "1")
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
 from .config import Settings, get_settings
-from .transcriber import get_pyannote_worker_manager
+from .transcriber import get_audio_duration, get_pyannote_worker_manager
 
 
 REPORT_FORMATS = {
@@ -66,10 +67,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+cors_origins = [origin.strip() for origin in settings.cors_origin.split(",") if origin.strip()]
+if not cors_origins:
+    cors_origins = ["http://localhost:5173"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.cors_origin],
-    allow_credentials=True,
+    allow_origins=cors_origins,
+    allow_credentials="*" not in cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -94,6 +99,7 @@ async def analyze_call(
 
     upload_path = settings.upload_dir / job_id / filename
     await _save_upload(file, upload_path)
+    _validate_audio_duration(upload_path)
 
     report_dir = settings.output_dir / job_id
     return EventSourceResponse(
@@ -171,6 +177,30 @@ def download_report(report_id: str, report_format: str) -> FileResponse:
     )
 
 
+if settings.frontend_dist_dir.exists():
+    assets_dir = settings.frontend_dist_dir / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    def serve_frontend_root() -> FileResponse:
+        return FileResponse(settings.frontend_dist_dir / "index.html")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def serve_frontend(full_path: str) -> FileResponse | HTMLResponse:
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
+
+        candidate = settings.frontend_dist_dir / full_path
+        if candidate.is_file():
+            return FileResponse(candidate)
+
+        index_path = settings.frontend_dist_dir / "index.html"
+        if index_path.exists():
+            return FileResponse(index_path)
+        return HTMLResponse("Frontend build not found.", status_code=404)
+
+
 async def _pipeline_event_stream(
     input_path: Path,
     report_dir: Path,
@@ -232,6 +262,29 @@ async def _save_upload(file: UploadFile, destination: Path) -> None:
         while chunk := await file.read(1024 * 1024):
             handle.write(chunk)
     await file.close()
+
+
+def _validate_audio_duration(path: Path) -> None:
+    if settings.max_audio_seconds <= 0:
+        return
+
+    duration = get_audio_duration(path)
+    if duration <= 0:
+        return
+    if duration <= settings.max_audio_seconds:
+        return
+
+    try:
+        path.unlink()
+    except OSError:
+        pass
+    raise HTTPException(
+        status_code=413,
+        detail=(
+            f"Audio is {duration:.0f}s long. Hosted demo uploads are limited to "
+            f"{settings.max_audio_seconds}s to keep processing timely."
+        ),
+    )
 
 
 def _resolve_report_dir(report_id: str) -> Path:

@@ -25,6 +25,7 @@ class Settings:
     upload_dir: Path = ROOT_DIR / "uploads"
     temp_dir: Path = ROOT_DIR / ".tmp"
     model_dir: Path = BACKEND_DIR / "models"
+    frontend_dist_dir: Path = ROOT_DIR / "frontend" / "dist"
     phi3_model_path: Path = Path(
         os.getenv(
             "VCA_MODEL_PATH",
@@ -37,7 +38,11 @@ class Settings:
     analyzer_mode: str = os.getenv("VCA_ANALYZER_MODE", "auto")
     llm_runtime: str = os.getenv("VCA_LLM_RUNTIME", "mlx")
     mlx_model_path: str = os.getenv("VCA_MLX_MODEL_PATH", "mlx-community/Phi-3-mini-4k-instruct-4bit")
+    hf_inference_model: str = os.getenv("VCA_HF_INFERENCE_MODEL", "microsoft/Phi-3-mini-4k-instruct")
+    hf_inference_provider: str | None = os.getenv("VCA_HF_INFERENCE_PROVIDER") or None
+    hf_inference_timeout_seconds: int = int(os.getenv("VCA_HF_INFERENCE_TIMEOUT_SECONDS", "90"))
     max_transcript_chars: int = int(os.getenv("VCA_MAX_TRANSCRIPT_CHARS", "2500"))
+    max_audio_seconds: int = int(os.getenv("VCA_MAX_AUDIO_SECONDS", "0"))
     llama_threads: int = int(os.getenv("VCA_LLAMA_THREADS", "4"))
     llama_ctx: int = int(os.getenv("VCA_LLAMA_CTX", "3072"))
     llama_gpu_layers: int = int(os.getenv("VCA_LLAMA_GPU_LAYERS", "0"))
@@ -50,6 +55,8 @@ class Settings:
     )
     pyannote_hf_timeout_seconds: int = int(os.getenv("VCA_PYANNOTE_HF_TIMEOUT_SECONDS", "120"))
     pyannote_worker_threads: int = int(os.getenv("VCA_PYANNOTE_WORKER_THREADS", "4"))
+    pyannote_device: str = os.getenv("VCA_PYANNOTE_DEVICE", "auto")
+    pyannote_cuda_visible_devices: str = os.getenv("VCA_PYANNOTE_CUDA_VISIBLE_DEVICES", "")
     pyannote_stub_torch_dynamo: bool = os.getenv("VCA_PYANNOTE_STUB_TORCH_DYNAMO", "true").lower() in {
         "1",
         "true",

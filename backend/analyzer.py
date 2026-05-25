@@ -310,6 +310,81 @@ def _run_mlx_json(model: Any, tokenizer: Any, prompt: str, max_tokens: int, temp
     return parsed
 
 
+def _prompt_to_chat_messages(prompt: str) -> list[dict[str, str]]:
+    system_match = re.search(r"<\|system\|>\s*([\s\S]*?)\s*<\|end\|>", prompt)
+    user_match = re.search(r"<\|user\|>\s*([\s\S]*?)\s*<\|end\|>", prompt)
+    if system_match and user_match:
+        return [
+            {"role": "system", "content": system_match.group(1).strip()},
+            {"role": "user", "content": user_match.group(1).strip()},
+        ]
+    return [{"role": "user", "content": prompt}]
+
+
+def _extract_chat_content(response: Any) -> str:
+    choices = response.get("choices") if isinstance(response, dict) else getattr(response, "choices", None)
+    if not choices:
+        return str(response).strip()
+
+    choice = choices[0]
+    message = choice.get("message") if isinstance(choice, dict) else getattr(choice, "message", None)
+    if message is None:
+        text = choice.get("text") if isinstance(choice, dict) else getattr(choice, "text", "")
+        return str(text).strip()
+
+    content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
+    return str(content).strip()
+
+
+def _run_hf_inference_json(payload: dict[str, Any], prompt: str, max_tokens: int, temperature: float) -> dict[str, Any]:
+    try:
+        from huggingface_hub import InferenceClient
+    except Exception as exc:  # noqa: BLE001 - dependency/token/provider failures are surfaced clearly.
+        raise RuntimeError(f"huggingface_hub inference client is not available: {exc}") from exc
+
+    token = str(payload.get("hf_token") or "").strip()
+    if not token:
+        raise RuntimeError("HF_TOKEN is required for VCA_LLM_RUNTIME=hf_inference.")
+
+    model_id = str(payload["hf_inference_model"])
+    provider = payload.get("hf_inference_provider") or None
+    timeout = float(payload["hf_inference_timeout_seconds"])
+    client = InferenceClient(
+        model=model_id,
+        provider=provider,
+        token=token,
+        timeout=timeout,
+    )
+    messages = _prompt_to_chat_messages(prompt)
+
+    request = {
+        "messages": messages,
+        "model": model_id,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "top_p": 0.9 if temperature > 0 else 0.1,
+        "stop": ["<|end|>"],
+    }
+    try:
+        response = client.chat_completion(
+            **request,
+            response_format={"type": "json_object"},
+        )
+    except Exception as exc:  # noqa: BLE001 - some providers reject response_format.
+        if "response_format" not in str(exc).lower():
+            raise
+        response = client.chat_completion(**request)
+
+    raw_text = _extract_chat_content(response)
+    parsed = _parse_json(raw_text)
+    if not isinstance(parsed, dict):
+        return {
+            "error": "parse_failed",
+            "raw": raw_text,
+        }
+    return parsed
+
+
 def _analyze_with_llm_in_worker(payload: dict[str, Any]) -> dict[str, Any]:
     transcript_blocks = list(payload["transcript_blocks"])
     transcript = _format_transcript(
@@ -320,7 +395,15 @@ def _analyze_with_llm_in_worker(payload: dict[str, Any]) -> dict[str, Any]:
     runtime = str(payload.get("llm_runtime", "llama_cpp")).strip().lower()
     max_tokens = int(payload["llama_max_tokens"])
 
-    if runtime == "mlx":
+    if runtime == "hf_inference":
+        runner = lambda temperature: _run_hf_inference_json(
+            payload,
+            prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        model_name = str(payload["hf_inference_model"])
+    elif runtime == "mlx":
         model, tokenizer = _load_mlx_model(str(payload["mlx_model_path"]))
         runner = lambda temperature: _run_mlx_json(
             model,
@@ -345,7 +428,7 @@ def _analyze_with_llm_in_worker(payload: dict[str, Any]) -> dict[str, Any]:
         )
         model_name = str(payload["model_name"])
     else:
-        raise RuntimeError("VCA_LLM_RUNTIME must be one of: mlx, llama_cpp")
+        raise RuntimeError("VCA_LLM_RUNTIME must be one of: mlx, llama_cpp, hf_inference")
 
     analysis = runner(0.3)
 
@@ -430,6 +513,10 @@ def _analyze_with_llm(
         "model_path": str(settings.phi3_model_path),
         "model_name": settings.phi3_model_path.name,
         "mlx_model_path": settings.mlx_model_path,
+        "hf_inference_model": settings.hf_inference_model,
+        "hf_inference_provider": settings.hf_inference_provider,
+        "hf_inference_timeout_seconds": settings.hf_inference_timeout_seconds,
+        "hf_token": settings.hf_token,
         "max_transcript_chars": settings.max_transcript_chars,
         "llama_ctx": settings.llama_ctx,
         "llama_threads": settings.llama_threads,
@@ -502,10 +589,14 @@ def analyze_transcript(
     if mode not in {"auto", "llm", "heuristic"}:
         raise ValueError("analyzer_mode must be one of: auto, llm, heuristic")
 
-    if runtime not in {"mlx", "llama_cpp"}:
-        raise ValueError("VCA_LLM_RUNTIME must be one of: mlx, llama_cpp")
+    if runtime not in {"mlx", "llama_cpp", "hf_inference"}:
+        raise ValueError("VCA_LLM_RUNTIME must be one of: mlx, llama_cpp, hf_inference")
 
-    llm_configured = runtime == "mlx" or settings.phi3_model_path.exists()
+    llm_configured = (
+        runtime == "mlx"
+        or (runtime == "hf_inference" and bool(settings.hf_token))
+        or settings.phi3_model_path.exists()
+    )
 
     if mode == "auto" and llm_configured:
         try:
@@ -524,9 +615,9 @@ def analyze_transcript(
 
     if mode == "llm":
         raise FileNotFoundError(
-            f"Phi-3 GGUF model file not found at {settings.phi3_model_path}. "
-            "Set VCA_LLM_RUNTIME=mlx to use the local MLX Phi-3 model, "
-            "download the GGUF file, or use --analyzer-mode heuristic for a smoke test."
+            "Phi-3 is not configured. Set VCA_LLM_RUNTIME=hf_inference with HF_TOKEN, "
+            "set VCA_LLM_RUNTIME=mlx to use the local MLX Phi-3 model, download the "
+            f"GGUF file at {settings.phi3_model_path}, or use --analyzer-mode heuristic."
         )
 
     analysis = heuristic_analysis(transcript_blocks)

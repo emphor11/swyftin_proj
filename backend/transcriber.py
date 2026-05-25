@@ -270,7 +270,8 @@ class PyannoteWorkerManager:
         env["MKL_NUM_THREADS"] = str(settings.pyannote_worker_threads)
         env["VECLIB_MAXIMUM_THREADS"] = str(settings.pyannote_worker_threads)
         env["NUMEXPR_NUM_THREADS"] = str(settings.pyannote_worker_threads)
-        env["CUDA_VISIBLE_DEVICES"] = ""
+        env["CUDA_VISIBLE_DEVICES"] = settings.pyannote_cuda_visible_devices
+        env["VCA_PYANNOTE_DEVICE"] = settings.pyannote_device
         env["VCA_PYANNOTE_STUB_TORCH_DYNAMO"] = "1" if settings.pyannote_stub_torch_dynamo else "0"
         if settings.hf_token:
             env["HF_TOKEN"] = settings.hf_token

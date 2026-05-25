@@ -181,8 +181,38 @@ def _load_pipeline():
         )
     if pipeline is None:
         raise RuntimeError("Could not load pyannote/speaker-diarization-3.1.")
+    _move_pipeline_to_requested_device(pipeline)
     _log_phase("pyannote pipeline loaded")
     return pipeline
+
+
+def _move_pipeline_to_requested_device(pipeline) -> None:
+    requested_device = os.environ.get("VCA_PYANNOTE_DEVICE", "auto").strip().lower()
+    if requested_device in {"", "cpu", "none"}:
+        _log_phase("pyannote pipeline using CPU")
+        return
+
+    try:
+        import torch
+    except Exception as exc:  # noqa: BLE001 - device acceleration is optional.
+        _log_phase(f"torch unavailable for device placement; using CPU: {exc}")
+        return
+
+    device_name = requested_device
+    if requested_device == "auto":
+        if torch.cuda.is_available():
+            device_name = "cuda"
+        elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            device_name = "mps"
+        else:
+            _log_phase("no accelerator detected for pyannote; using CPU")
+            return
+
+    try:
+        pipeline.to(torch.device(device_name))
+        _log_phase(f"pyannote pipeline moved to {device_name}")
+    except Exception as exc:  # noqa: BLE001 - fall back to CPU rather than breaking startup.
+        _log_phase(f"could not move pyannote pipeline to {device_name}; using CPU: {exc}")
 
 
 def _warm_forward_pass(pipeline) -> None:

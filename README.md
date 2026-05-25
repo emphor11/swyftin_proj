@@ -7,6 +7,7 @@ End-to-end voice call analysis pipeline that accepts an audio recording, normali
 This project has a working CLI, FastAPI backend, SSE progress stream, report generation, and Vite/React dashboard. The default Phi-3 path uses `mlx-lm` on Apple Silicon for local Metal-backed inference. `llama-cpp-python` remains available as a GGUF fallback runtime. Phi-3 mode is strict: if the local model cannot run, the request fails clearly instead of silently pretending a heuristic report came from Phi-3. Auto mode still falls back to the heuristic analyzer so demos never hang. Pyannote requires a Hugging Face token and accepted model terms; if it is unavailable, the pipeline falls back to speaker alternation.
 
 Docker Compose support is included for reproducible frontend/backend setup. The SLM choice writeup is available at `docs/justification.md`.
+For a public recruiter-facing demo, use the Modal deployment path. Modal gives the app one hosted URL and can run the audio pipeline on GPU-backed infrastructure while using Hugging Face Inference for hosted Phi-3 analysis.
 
 ## Architecture
 
@@ -197,6 +198,56 @@ HF_TOKEN=hf_your_token_here docker compose up --build
 
 If no token is available, the pipeline still completes using fallback speaker alternation.
 
+## Hosted Demo On Modal
+
+Modal is the recommended free-credit hosted path. It serves the existing React dashboard and FastAPI backend from one public URL, runs Whisper/Pyannote on Modal GPU infrastructure, and uses Hugging Face Inference for Phi-3 mode so the hosted demo does not need to load the GGUF model inside the web container.
+
+Install and authenticate the Modal client locally:
+
+```bash
+.venv/bin/pip install modal
+python3 -m modal setup
+```
+
+Build the frontend before deployment because the Modal app serves `frontend/dist` as static files:
+
+```bash
+cd frontend
+npm run build
+cd ..
+```
+
+Create a Modal secret named `voice-call-analysis-secrets` from the dashboard or CLI. It must include at least:
+
+```text
+HF_TOKEN=hf_your_token_here
+VCA_ANALYZER_MODE=auto
+VCA_LLM_RUNTIME=hf_inference
+VCA_HF_INFERENCE_MODEL=microsoft/Phi-3-mini-4k-instruct
+VCA_HF_INFERENCE_TIMEOUT_SECONDS=90
+VCA_LLAMA_TIMEOUT_SECONDS=120
+VCA_WHISPER_MODEL=small
+VCA_WHISPER_LANGUAGE=en
+VCA_PYANNOTE_NUM_SPEAKERS=2
+VCA_PYANNOTE_TIMEOUT_SECONDS=240
+VCA_MAX_AUDIO_SECONDS=120
+VCA_CORS_ORIGIN=*
+```
+
+Deploy:
+
+```bash
+modal deploy modal_app.py
+```
+
+Modal prints a public URL after deployment. Use that URL as the recruiter-facing hosted app. Keep hosted demo clips short and clear, ideally 30-90 seconds, because free credits are limited and long audio can consume the budget quickly.
+
+Hosted mode behavior:
+
+- Fast mode uses Whisper + Pyannote + heuristic analysis.
+- Auto mode tries hosted Phi-3 through Hugging Face Inference and falls back to heuristic with a warning if needed.
+- Phi-3 mode requires Hugging Face Inference to return valid JSON; if it fails, the UI shows a clear error instead of labeling a heuristic report as Phi-3.
+
 ## CLI Usage
 
 Run the full audio pipeline:
@@ -279,11 +330,15 @@ transcript.txt
 | `HF_TOKEN` | none | Hugging Face token for Pyannote. |
 | `VCA_MODEL_PATH` | `backend/models/Phi-3-mini-4k-instruct-q4.gguf` | Phi-3 GGUF path. |
 | `VCA_ANALYZER_MODE` | `auto` | Default analyzer mode: `auto`, `llm`, or `heuristic`. |
-| `VCA_LLM_RUNTIME` | `mlx` | Local Phi-3 runtime: `mlx` for Apple Silicon MLX, or `llama_cpp` for the GGUF path. |
+| `VCA_LLM_RUNTIME` | `mlx` | Phi-3 runtime: `mlx` for Apple Silicon MLX, `llama_cpp` for the GGUF path, or `hf_inference` for hosted Hugging Face Inference. |
 | `VCA_MLX_MODEL_PATH` | `mlx-community/Phi-3-mini-4k-instruct-4bit` | Hugging Face model id or local path for MLX Phi-3. |
+| `VCA_HF_INFERENCE_MODEL` | `microsoft/Phi-3-mini-4k-instruct` | Hosted Phi-3 model id used when `VCA_LLM_RUNTIME=hf_inference`. |
+| `VCA_HF_INFERENCE_PROVIDER` | unset | Optional Hugging Face Inference Provider name. Leave unset for automatic provider routing. |
+| `VCA_HF_INFERENCE_TIMEOUT_SECONDS` | `90` | HTTP timeout for hosted Phi-3 inference. |
 | `VCA_WHISPER_MODEL` | `small` | Whisper model name. |
 | `VCA_WHISPER_LANGUAGE` | `en` | Whisper language hint. |
 | `VCA_MAX_TRANSCRIPT_CHARS` | `2500` | Maximum timestamped transcript characters sent to Phi-3. |
+| `VCA_MAX_AUDIO_SECONDS` | `0` | Optional upload duration cap. `0` disables the cap; hosted demos should use `120`. |
 | `VCA_LLAMA_THREADS` | `4` | CPU thread count passed to llama-cpp-python. |
 | `VCA_LLAMA_CTX` | `3072` | Llama context window for the Phi-3 prompt and JSON output. |
 | `VCA_LLAMA_GPU_LAYERS` | `0` | Number of layers to offload. `0` is stable CPU mode; set `-1` only after Metal verification succeeds. |
@@ -296,6 +351,8 @@ transcript.txt
 | `VCA_PYANNOTE_HF_TIMEOUT_SECONDS` | `120` | Hugging Face hub network timeout used by the worker. Increase this for manual preload runs if the model is not cached yet. |
 | `VCA_PYANNOTE_WORKER_THREADS` | `4` | Thread cap for Pyannote worker numerical libraries (`OMP`, `MKL`, `vecLib`, and `numexpr`). |
 | `VCA_PYANNOTE_STUB_TORCH_DYNAMO` | `true` | Installs a small worker-only `torch._dynamo` compatibility stub to avoid importing PyTorch's slow compile stack during Pyannote inference. Set to `false` if you need real `torch.compile` support in the worker. |
+| `VCA_PYANNOTE_DEVICE` | `auto` | Pyannote device placement: `auto`, `cpu`, `cuda`, or `mps`. Modal sets this to `cuda`. |
+| `VCA_PYANNOTE_CUDA_VISIBLE_DEVICES` | empty | CUDA device visibility for the Pyannote worker. Modal sets this to `0`; local macOS can leave it empty. |
 | `VCA_CORS_ORIGIN` | `http://localhost:5173` | Frontend origin allowed by FastAPI CORS. |
 
 ## Troubleshooting
