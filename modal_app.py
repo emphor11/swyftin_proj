@@ -26,16 +26,16 @@ image = (
         "libsndfile1",
     )
     .workdir("/app")
-    .add_local_file("backend/requirements.txt", "/app/backend/requirements.txt")
+    .add_local_file("backend/requirements.txt", "/app/backend/requirements.txt", copy=True)
     .run_commands(
         'python -m pip install --upgrade "pip<25" "setuptools<81" wheel',
         'printf "setuptools<81\\n" > /tmp/build-constraints.txt',
         "PIP_CONSTRAINT=/tmp/build-constraints.txt python -m pip install -r /app/backend/requirements.txt",
+        "mkdir -p /app/output /app/uploads /app/.tmp /app/backend/models",
     )
     .add_local_dir("backend", "/app/backend")
     .add_local_file("main.py", "/app/main.py")
     .add_local_dir("frontend/dist", "/app/frontend/dist")
-    .run_commands("mkdir -p /app/output /app/uploads /app/.tmp /app/backend/models")
 )
 
 
