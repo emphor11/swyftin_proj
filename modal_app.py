@@ -46,10 +46,13 @@ image = (
     startup_timeout=int(os.getenv("VCA_MODAL_STARTUP_TIMEOUT_SECONDS", "600")),
     secrets=[modal.Secret.from_name(SECRET_NAME)],
     volumes={
-        "/root/.cache": cache_volume,
+        "/cache": cache_volume,
         "/app/output": output_volume,
     },
     env={
+        "HF_HOME": "/cache/huggingface",
+        "HUGGINGFACE_HUB_CACHE": "/cache/huggingface/hub",
+        "XDG_CACHE_HOME": "/cache/xdg",
         "PYDANTIC_DISABLE_PLUGINS": "1",
         "VCA_ANALYZER_MODE": "auto",
         "VCA_LLM_RUNTIME": "hf_inference",
