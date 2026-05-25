@@ -68,6 +68,7 @@ image = (
         "VCA_PYANNOTE_DEVICE": "cuda",
         "VCA_PYANNOTE_CUDA_VISIBLE_DEVICES": "0",
         "VCA_MAX_AUDIO_SECONDS": "120",
+        "VCA_MODAL_OUTPUT_VOLUME_NAME": OUTPUT_VOLUME_NAME,
         "VCA_CORS_ORIGIN": "*",
     },
 )

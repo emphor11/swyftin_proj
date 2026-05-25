@@ -69,6 +69,7 @@ class Settings:
         "yes",
         "on",
     }
+    modal_output_volume_name: str | None = os.getenv("VCA_MODAL_OUTPUT_VOLUME_NAME") or None
     cors_origin: str = os.getenv("VCA_CORS_ORIGIN", "http://localhost:5173")
 
 

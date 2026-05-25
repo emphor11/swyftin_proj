@@ -115,6 +115,8 @@ async def analyze_call(
 
 @app.get("/api/reports")
 def list_reports() -> dict[str, list[dict[str, Any]]]:
+    _reload_output_volume()
+
     reports = []
     report_dirs = [path for path in settings.output_dir.iterdir() if path.is_dir()]
     for report_dir in sorted(report_dirs, key=lambda path: path.stat().st_mtime, reverse=True):
@@ -143,6 +145,8 @@ def list_reports() -> dict[str, list[dict[str, Any]]]:
 
 @app.get("/api/reports/{report_id}")
 def get_report(report_id: str) -> dict[str, Any]:
+    _reload_output_volume()
+
     report_dir = _resolve_report_dir(report_id)
     report_json = report_dir / "report.json"
     if not report_json.exists():
@@ -224,6 +228,7 @@ async def _pipeline_event_stream(
                 settings=settings,
                 progress_callback=emit,
             )
+            _commit_output_volume()
             events.put(
                 {
                     "stage": "complete",
@@ -310,6 +315,31 @@ def _read_optional_text(path: Path) -> str | None:
     if not path.exists():
         return None
     return path.read_text(encoding="utf-8")
+
+
+def _commit_output_volume() -> None:
+    _modal_output_volume_action("commit")
+
+
+def _reload_output_volume() -> None:
+    _modal_output_volume_action("reload")
+
+
+def _modal_output_volume_action(action: str) -> None:
+    volume_name = settings.modal_output_volume_name
+    if not volume_name:
+        return
+
+    try:
+        import modal  # type: ignore[import-not-found]
+
+        volume = modal.Volume.from_name(volume_name)
+        if action == "commit":
+            volume.commit()
+        elif action == "reload":
+            volume.reload()
+    except Exception as exc:  # noqa: BLE001 - local/Docker runs should not fail on Modal-only persistence hooks.
+        logger.warning("Modal output volume %s failed for %s: %s", action, volume_name, exc)
 
 
 def _run_pipeline(*args: Any, **kwargs: Any) -> dict[str, Any]:
