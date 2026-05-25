@@ -385,6 +385,81 @@ def _run_hf_inference_json(payload: dict[str, Any], prompt: str, max_tokens: int
     return parsed
 
 
+@lru_cache(maxsize=1)
+def _load_transformers_model(model_id: str):
+    try:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+    except Exception as exc:  # noqa: BLE001 - deployment images may omit the hosted runtime deps.
+        raise RuntimeError(f"Transformers Phi-3 runtime is not available: {exc}") from exc
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("VCA_LLM_RUNTIME=transformers_cuda requires a CUDA GPU.")
+
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_id,
+            trust_remote_code=True,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            device_map="cuda",
+            torch_dtype=torch.float16,
+            trust_remote_code=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - surface HF/model load failures cleanly.
+        raise RuntimeError(f"Could not load Transformers Phi-3 model '{model_id}': {exc}") from exc
+
+    model.eval()
+    return model, tokenizer
+
+
+def _run_transformers_json(model: Any, tokenizer: Any, prompt: str, max_tokens: int, temperature: float) -> dict[str, Any]:
+    try:
+        import torch
+    except Exception as exc:  # noqa: BLE001 - torch import failures should be explicit.
+        raise RuntimeError(f"Torch is not available for Transformers generation: {exc}") from exc
+
+    try:
+        device = next(model.parameters()).device
+        inputs = tokenizer(prompt, return_tensors="pt")
+        inputs = {key: value.to(device) for key, value in inputs.items()}
+        input_length = inputs["input_ids"].shape[-1]
+
+        generation_kwargs: dict[str, Any] = {
+            **inputs,
+            "max_new_tokens": max_tokens,
+            "do_sample": False,
+            "pad_token_id": tokenizer.eos_token_id,
+            "eos_token_id": tokenizer.eos_token_id,
+        }
+        if temperature > 0:
+            generation_kwargs.update(
+                {
+                    "do_sample": True,
+                    "temperature": temperature,
+                    "top_p": 0.9,
+                }
+            )
+
+        with torch.inference_mode():
+            output_ids = model.generate(**generation_kwargs)
+
+        generated_ids = output_ids[0][input_length:]
+        raw_text = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+    except Exception as exc:  # noqa: BLE001 - generation failures should reach the UI clearly.
+        raise RuntimeError(f"Transformers Phi-3 generation failed: {exc}") from exc
+
+    raw_text = raw_text.split("<|end|>", 1)[0].strip()
+    parsed = _parse_json(raw_text)
+    if not isinstance(parsed, dict):
+        return {
+            "error": "parse_failed",
+            "raw": raw_text,
+        }
+    return parsed
+
+
 def _analyze_with_llm_in_worker(payload: dict[str, Any]) -> dict[str, Any]:
     transcript_blocks = list(payload["transcript_blocks"])
     transcript = _format_transcript(
@@ -403,6 +478,16 @@ def _analyze_with_llm_in_worker(payload: dict[str, Any]) -> dict[str, Any]:
             temperature=temperature,
         )
         model_name = str(payload["hf_inference_model"])
+    elif runtime == "transformers_cuda":
+        model, tokenizer = _load_transformers_model(str(payload["transformers_model"]))
+        runner = lambda temperature: _run_transformers_json(
+            model,
+            tokenizer,
+            prompt,
+            max_tokens=max_tokens,
+            temperature=0.0,
+        )
+        model_name = str(payload["transformers_model"])
     elif runtime == "mlx":
         model, tokenizer = _load_mlx_model(str(payload["mlx_model_path"]))
         runner = lambda temperature: _run_mlx_json(
@@ -428,7 +513,7 @@ def _analyze_with_llm_in_worker(payload: dict[str, Any]) -> dict[str, Any]:
         )
         model_name = str(payload["model_name"])
     else:
-        raise RuntimeError("VCA_LLM_RUNTIME must be one of: mlx, llama_cpp, hf_inference")
+        raise RuntimeError("VCA_LLM_RUNTIME must be one of: mlx, llama_cpp, hf_inference, transformers_cuda")
 
     analysis = runner(0.3)
 
@@ -513,6 +598,7 @@ def _analyze_with_llm(
         "model_path": str(settings.phi3_model_path),
         "model_name": settings.phi3_model_path.name,
         "mlx_model_path": settings.mlx_model_path,
+        "transformers_model": settings.transformers_model,
         "hf_inference_model": settings.hf_inference_model,
         "hf_inference_provider": settings.hf_inference_provider,
         "hf_inference_timeout_seconds": settings.hf_inference_timeout_seconds,
@@ -523,6 +609,35 @@ def _analyze_with_llm(
         "llama_gpu_layers": settings.llama_gpu_layers,
         "llama_max_tokens": settings.llama_max_tokens,
     }
+
+    if settings.llm_runtime.strip().lower() == "transformers_cuda":
+        try:
+            analysis = _analyze_with_llm_in_worker(payload)
+        except Exception as exc:  # noqa: BLE001 - hosted strict mode should surface runtime failures.
+            return _raise_or_fallback(
+                transcript_blocks,
+                "llm-error-fallback",
+                f"Phi-3 analysis failed: {exc}; heuristic fallback used.",
+                allow_fallback,
+            )
+
+        if "error" not in analysis:
+            return analysis
+
+        if analysis.get("error") == "parse_failed":
+            return _raise_or_fallback(
+                transcript_blocks,
+                "llm-parse-failure-fallback",
+                "Phi-3 returned invalid JSON; heuristic fallback used.",
+                allow_fallback,
+            )
+
+        return _raise_or_fallback(
+            transcript_blocks,
+            "llm-error-fallback",
+            f"Phi-3 analysis failed: {analysis.get('error', 'unknown Phi-3 error')}; heuristic fallback used.",
+            allow_fallback,
+        )
 
     context = multiprocessing.get_context("spawn")
     result_queue = context.Queue(maxsize=1)
@@ -589,12 +704,13 @@ def analyze_transcript(
     if mode not in {"auto", "llm", "heuristic"}:
         raise ValueError("analyzer_mode must be one of: auto, llm, heuristic")
 
-    if runtime not in {"mlx", "llama_cpp", "hf_inference"}:
-        raise ValueError("VCA_LLM_RUNTIME must be one of: mlx, llama_cpp, hf_inference")
+    if runtime not in {"mlx", "llama_cpp", "hf_inference", "transformers_cuda"}:
+        raise ValueError("VCA_LLM_RUNTIME must be one of: mlx, llama_cpp, hf_inference, transformers_cuda")
 
     llm_configured = (
         runtime == "mlx"
         or (runtime == "hf_inference" and bool(settings.hf_token))
+        or (runtime == "transformers_cuda" and bool(settings.hf_token))
         or settings.phi3_model_path.exists()
     )
 
@@ -616,6 +732,7 @@ def analyze_transcript(
     if mode == "llm":
         raise FileNotFoundError(
             "Phi-3 is not configured. Set VCA_LLM_RUNTIME=hf_inference with HF_TOKEN, "
+            "set VCA_LLM_RUNTIME=transformers_cuda with HF_TOKEN for hosted Modal GPU Phi-3, "
             "set VCA_LLM_RUNTIME=mlx to use the local MLX Phi-3 model, download the "
             f"GGUF file at {settings.phi3_model_path}, or use --analyzer-mode heuristic."
         )

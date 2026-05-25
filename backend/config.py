@@ -38,6 +38,7 @@ class Settings:
     analyzer_mode: str = os.getenv("VCA_ANALYZER_MODE", "auto")
     llm_runtime: str = os.getenv("VCA_LLM_RUNTIME", "mlx")
     mlx_model_path: str = os.getenv("VCA_MLX_MODEL_PATH", "mlx-community/Phi-3-mini-4k-instruct-4bit")
+    transformers_model: str = os.getenv("VCA_TRANSFORMERS_MODEL", "microsoft/Phi-3-mini-4k-instruct")
     hf_inference_model: str = os.getenv("VCA_HF_INFERENCE_MODEL", "microsoft/Phi-3-mini-4k-instruct")
     hf_inference_provider: str | None = os.getenv("VCA_HF_INFERENCE_PROVIDER") or None
     hf_inference_timeout_seconds: int = int(os.getenv("VCA_HF_INFERENCE_TIMEOUT_SECONDS", "90"))

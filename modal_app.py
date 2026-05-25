@@ -9,6 +9,13 @@ APP_NAME = "voice-call-analysis"
 SECRET_NAME = "voice-call-analysis-secrets"
 CACHE_VOLUME_NAME = "voice-call-analysis-cache"
 OUTPUT_VOLUME_NAME = "voice-call-analysis-output"
+HOSTED_RUNTIME_OVERRIDES = {
+    "VCA_ANALYZER_MODE": "auto",
+    "VCA_LLM_RUNTIME": "transformers_cuda",
+    "VCA_TRANSFORMERS_MODEL": "microsoft/Phi-3-mini-4k-instruct",
+    "VCA_LLAMA_MAX_TOKENS": "900",
+    "VCA_LLAMA_TIMEOUT_SECONDS": "120",
+}
 
 
 app = modal.App(APP_NAME)
@@ -55,9 +62,9 @@ image = (
         "XDG_CACHE_HOME": "/cache/xdg",
         "PYDANTIC_DISABLE_PLUGINS": "1",
         "VCA_ANALYZER_MODE": "auto",
-        "VCA_LLM_RUNTIME": "hf_inference",
-        "VCA_HF_INFERENCE_MODEL": "microsoft/Phi-3-mini-4k-instruct",
-        "VCA_HF_INFERENCE_TIMEOUT_SECONDS": "90",
+        "VCA_LLM_RUNTIME": "transformers_cuda",
+        "VCA_TRANSFORMERS_MODEL": "microsoft/Phi-3-mini-4k-instruct",
+        "VCA_LLAMA_MAX_TOKENS": "900",
         "VCA_LLAMA_TIMEOUT_SECONDS": "120",
         "VCA_WHISPER_MODEL": "small",
         "VCA_WHISPER_LANGUAGE": "en",
@@ -74,6 +81,7 @@ image = (
 )
 @modal.asgi_app()
 def web_app():
+    os.environ.update(HOSTED_RUNTIME_OVERRIDES)
     from backend.main import app as fastapi_app
 
     return fastapi_app

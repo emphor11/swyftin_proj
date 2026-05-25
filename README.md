@@ -222,9 +222,9 @@ Create a Modal secret named `voice-call-analysis-secrets` from the dashboard or 
 ```text
 HF_TOKEN=hf_your_token_here
 VCA_ANALYZER_MODE=auto
-VCA_LLM_RUNTIME=hf_inference
-VCA_HF_INFERENCE_MODEL=microsoft/Phi-3-mini-4k-instruct
-VCA_HF_INFERENCE_TIMEOUT_SECONDS=90
+VCA_LLM_RUNTIME=transformers_cuda
+VCA_TRANSFORMERS_MODEL=microsoft/Phi-3-mini-4k-instruct
+VCA_LLAMA_MAX_TOKENS=900
 VCA_LLAMA_TIMEOUT_SECONDS=120
 VCA_WHISPER_MODEL=small
 VCA_WHISPER_LANGUAGE=en
@@ -246,8 +246,8 @@ Modal prints a public URL after deployment. Use that URL as the recruiter-facing
 Hosted mode behavior:
 
 - Fast mode uses Whisper + Pyannote + heuristic analysis.
-- Auto mode tries hosted Phi-3 through Hugging Face Inference and falls back to heuristic with a warning if needed.
-- Phi-3 mode requires Hugging Face Inference to return valid JSON; if it fails, the UI shows a clear error instead of labeling a heuristic report as Phi-3.
+- Auto mode tries hosted Phi-3 on the Modal GPU and falls back to heuristic with a warning if needed.
+- Phi-3 mode runs Microsoft Phi-3 Mini on the Modal GPU through Transformers. If it fails, the UI shows a clear error instead of labeling a heuristic report as Phi-3.
 
 ## CLI Usage
 
@@ -331,8 +331,9 @@ transcript.txt
 | `HF_TOKEN` | none | Hugging Face token for Pyannote. |
 | `VCA_MODEL_PATH` | `backend/models/Phi-3-mini-4k-instruct-q4.gguf` | Phi-3 GGUF path. |
 | `VCA_ANALYZER_MODE` | `auto` | Default analyzer mode: `auto`, `llm`, or `heuristic`. |
-| `VCA_LLM_RUNTIME` | `mlx` | Phi-3 runtime: `mlx` for Apple Silicon MLX, `llama_cpp` for the GGUF path, or `hf_inference` for hosted Hugging Face Inference. |
+| `VCA_LLM_RUNTIME` | `mlx` | Phi-3 runtime: `mlx` for Apple Silicon MLX, `llama_cpp` for the GGUF path, `hf_inference` for Hugging Face provider routing, or `transformers_cuda` for Modal GPU hosting. |
 | `VCA_MLX_MODEL_PATH` | `mlx-community/Phi-3-mini-4k-instruct-4bit` | Hugging Face model id or local path for MLX Phi-3. |
+| `VCA_TRANSFORMERS_MODEL` | `microsoft/Phi-3-mini-4k-instruct` | Hugging Face model id loaded directly with Transformers when `VCA_LLM_RUNTIME=transformers_cuda`. |
 | `VCA_HF_INFERENCE_MODEL` | `microsoft/Phi-3-mini-4k-instruct` | Hosted Phi-3 model id used when `VCA_LLM_RUNTIME=hf_inference`. |
 | `VCA_HF_INFERENCE_PROVIDER` | unset | Optional Hugging Face Inference Provider name. Leave unset for automatic provider routing. |
 | `VCA_HF_INFERENCE_TIMEOUT_SECONDS` | `90` | HTTP timeout for hosted Phi-3 inference. |
@@ -402,7 +403,7 @@ Very long clips, first-time model downloads, or CPU-only execution can still exc
 pkill -f pyannote_worker.py
 ```
 
-Phi-3 mode is the local quality mode. It stays open-source and local. The preferred Apple Silicon runtime is MLX (`VCA_LLM_RUNTIME=mlx`), which uses the local Metal stack and avoids the very slow CPU-only `llama-cpp-python` path. In strict `llm` mode, the analyzer does not silently fall back to heuristics: if MLX/llama-cpp cannot load, returns invalid JSON twice, or exceeds `VCA_LLAMA_TIMEOUT_SECONDS`, the API returns a clear error. In `auto` mode, the same failure turns into a complete heuristic fallback report with a warning. Fast mode remains the safest path when you need predictable runtime.
+Phi-3 mode is the quality mode. It stays open-source: local development can use MLX on Apple Silicon (`VCA_LLM_RUNTIME=mlx`) or GGUF through `llama_cpp`, while the hosted Modal demo uses `VCA_LLM_RUNTIME=transformers_cuda` to load `microsoft/Phi-3-mini-4k-instruct` directly on the Modal GPU. In strict `llm` mode, the analyzer does not silently fall back to heuristics: if Phi-3 cannot load, returns invalid JSON twice, or exceeds the protected local-worker path, the API returns a clear error. In `auto` mode, the same failure turns into a complete heuristic fallback report with a warning. Fast mode remains the safest path when you need predictable runtime.
 
 If MLX fails with `No Metal device available`, the Python process cannot see the Mac GPU. This commonly happens from headless or sandboxed launchers. Start the backend from a normal Terminal window and retry:
 
