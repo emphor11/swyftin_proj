@@ -183,12 +183,12 @@ if settings.frontend_dist_dir.exists():
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
-    @app.get("/", include_in_schema=False)
-    def serve_frontend_root() -> FileResponse:
+    @app.get("/", include_in_schema=False, response_model=None)
+    def serve_frontend_root():
         return FileResponse(settings.frontend_dist_dir / "index.html")
 
-    @app.get("/{full_path:path}", include_in_schema=False)
-    def serve_frontend(full_path: str) -> FileResponse | HTMLResponse:
+    @app.get("/{full_path:path}", include_in_schema=False, response_model=None)
+    def serve_frontend(full_path: str):
         if full_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="Not found")
 
